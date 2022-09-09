@@ -19,7 +19,12 @@
 #include <pthread.h>
 #include <sqlite3.h>
 #include <errno.h>
-#include "threadpool.h"
+
+#include "../threadpool/threadpool.h"
+#include "clientoptions.h"
+#include "userinfo.h"
+#include "userlinklist.h"
+#include "info.h"
 
 //打印出错误信息与发生位置
 #define ERRLOG(errmsg)                                          \
@@ -28,137 +33,62 @@
         perror(errmsg);                                         \
         printf("%s - %s - %d\n", __FILE__, __func__, __LINE__); \
     } while (0)
+
 #define FAILURE -1
 #define SUCCESS 0
 //客户端最大连接个数
+
 #define CLIENT_MAXSIZE 1024
-//接收缓冲区
-#define BUF_MAXSIZE 128
+
 //线程互斥量上锁解锁操作
 #define LOCK(mutex) pthread_mutex_lock(&(mutex))
 #define UNLOCK(mutex) pthread_mutex_unlock(&(mutex))
-
-//客户端的操作
-enum option
-{
-    U_LOGIN = 1,
-    U_REGISTER,
-    U_CHATHALL,
-    U_QUITCHAT,
-    U_PRIVATE_CHAT,
-    U_VIEW_ONLINE,
-    U_UPLOAD_FILE,
-    U_DOWN_FILE,
-    U_UPDATE_NAME,
-    U_RETRIEVE_PASSWD,
-    U_UPDATE_PASSWD,
-    ADMIN_BANNING,
-    ADMIN_DIS_BANNING,
-    ADMIN_EXITUSR
-    /**
-     * opt = U_LOGIN --- 登录
-     * opt = U_REGISTER --- 注册
-     * opt = U_CHATHALL --- 聊天大厅
-     * opt = U_QUITCHAT --- 退出聊天大厅
-     * opt = U_PRIVATE_CHAT --- 客户端间私聊
-     * opt = U_VIEW_ONLINE --- 查看在线用户
-     * opt = U_UPLOAD_FILE --- 上传文件
-     * opt = U_DOWN_FILE --- 下载文件
-     * opt = U_UPDATE_NAME --- 修改昵称
-     * opt = U_RETRIEVE_PASSWD --- 找回密码
-     * opt = U_UPDATE_PASSWD --- 修改密码
-     *
-     *
-     * 管理员操作
-     * opt = ADMIN_BANNING
-     * opt = ADMIN_DIS_BANNING
-     * opt = ADMIN_EXITUSR
-     */
-};
-
-//用户信息结构体，用于传递客户的信息
-struct usrinfo
-{
-    //账号为6位数字
-    char id[7];
-    //密码为6-13个字符
-    char passwd[14];
-    //昵称最长为15个字节
-    char name[16];
-};
+#define TRYLOCK(mutex) pthread_mutex_trylock(&(mutex))
 
 //服务器参数
-struct server_t
+typedef struct server_t
 {
     // 创建的套接字
     int sockfd;
     // 创建epoll对象
     int epfd;
+
     // 存放在忙的文件描述符，保证一个文件描述符在只能同时被一个recv函数阻塞等待接收数据
     int workingfds[CLIENT_MAXSIZE];
-    // 记录已经登录的用户的最大文件描述符
-    // 为验证账号是否已经被登录的最大循环次数
-    int login_maxfd;
     // 存放进入聊天大厅的用户
     int usrs_chathall[CLIENT_MAXSIZE];
+
     // 为验证账号是否在聊天大厅中的最大循环次数
     int chat_maxfd;
     // 存放发生事件的events数组
     struct epoll_event events[CLIENT_MAXSIZE];
+
     // 存放在线的用户的信息
     // 客户端的文件描述符即为存放客户端信息数组的下标
-    struct usrinfo usrs_online[CLIENT_MAXSIZE];
-};
+    userlinklist *usrs_online;
+    pthread_mutex_t usrs_online_mutex;
 
-// 打包后的消息
-struct info
-{
-    /**
-     * @brief 传递的消息类型
-     * opt = U_LOGIN --- 登录
-     * opt = U_REGISTER --- 注册
-     * opt = U_CHATHALL --- 进入聊天大厅
-     * opt = U_QUITCHAT --- 退出聊天大厅
-     * opt = U_PRIVATE_CHAT --- 客户端间私聊
-     * opt = U_VIEW_ONLINE --- 查看在线用户
-     * opt = U_UPLOAD_FILE --- 接收客户端上传的文件
-     * opt = U_DOWN_FILE --- 发送给客户端要下载的文件
-     * opt = U_UPDATE_NAME--- 将昵称修改为客户端请求修改的新昵称
-     * opt = U_RETRIEVE_PASSWD --- 用户找回密码
-     * opt = U_UPDATE_PASSWD --- 修改密码
-     *
-     *
-     * 管理员操作
-     * opt = ADMIN_BANNING
-     * opt = ADMIN_DIS_BANNING
-     * opt = ADMIN_EXITUSR
-     *
-     */
-    //用户信息
-    struct usrinfo usr;
-    //消息正文
-    char text[BUF_MAXSIZE];
-    /**
-     * @brief 标志客户端进行了什么操作
-     * 1 --- 登录
-     * 2 --- 注册
-     * 3 --- 进入聊天大厅
-     * 4 --- 退出聊天大厅
-     * 5 --- 在聊天大厅内进行私聊
-     * 6 --- 查看在线用户
-     * 7 --- 客户端上传文件
-     * 8 --- 客户端下载文件
-     * 9 --- 修改昵称
-     * 10 --- 用户找回密码
-     * 11 --- 修改密码
-     *
-     * 管理员操作
-     * 12 --- 对客户端禁言
-     * 13 --- 对客户端解除禁言
-     * 14 --- 对客户端踢出聊天室
-     */
-    enum option opt;
-};
+    //创建的线程池
+    threadpool *pool;
+
+    //数据库句柄
+    sqlite3 *usrsdb;
+    //数据库操作互斥量
+    pthread_mutex_t usrsdb_mutex;
+
+    //文件指针（用于保存所有人的聊天信息）
+    FILE *ChatFp;
+    // 文件指针操作互斥量
+    pthread_mutex_t ChatFp_mutex;
+}server_t;
+
+/**
+ * @brief
+ * 初始化服务器基本参数
+ * server : 服务器结构体
+ * @return 成功返回0 失败返回-1
+ */
+int InitServerOptions(server_t *server);
 
 /**
  * @brief

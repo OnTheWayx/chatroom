@@ -896,3 +896,57 @@ Wed Apr 27 16:41:03 2022
 xujiayue（我）：hahha
 Wed Apr 27 16:41:04 2022
 xujiayue（我）：hahha
+Thu Sep  8 19:53:43 2022
+进入聊天大厅
+Thu Sep  8 19:53:45 2022
+xujiayue（我）：dsad
+Thu Sep  8 19:53:46 2022
+xujiayue（我）：sad
+Thu Sep  8 19:53:46 2022
+xujiayue（我）：sad
+Thu Sep  8 19:53:46 2022
+xujiayue（我）：as
+Thu Sep  8 19:53:46 2022
+xujiayue（我）：das
+Thu Sep  8 19:53:46 2022
+xujiayue（我）：d
+Thu Sep  8 19:53:49 2022
+xujiayue（我）：dsad
+Thu Sep  8 19:53:50 2022
+xujiayue（我）：sad
+Thu Sep  8 19:53:51 2022
+222222 yaoyao:dsad
+Thu Sep  8 19:53:52 2022
+222222 yaoyao:asdas
+Thu Sep  8 19:53:53 2022
+222222 yaoyao:sds
+Thu Sep  8 19:53:53 2022
+222222 yaoyao:dsad
+Thu Sep  8 19:53:54 2022
+222222 yaoyao:sadsad
+Thu Sep  8 19:53:54 2022
+222222 yaoyao:sds
+Thu Sep  8 19:53:55 2022
+222222 yaoyao:dsd
+Thu Sep  8 19:54:20 2022
+退出聊天大厅
+Fri Sep  9 17:08:35 2022
+进入聊天大厅
+Fri Sep  9 17:08:35 2022
+xujiayue（我）：s
+Fri Sep  9 17:08:35 2022
+xujiayue（我）：dsa
+Fri Sep  9 17:08:36 2022
+xujiayue（我）：d
+Fri Sep  9 17:08:37 2022
+退出聊天大厅
+Fri Sep  9 18:57:52 2022
+进入聊天大厅
+Fri Sep  9 18:58:14 2022
+222222 yaoyao:hahha
+Fri Sep  9 18:58:17 2022
+xujiayue（我）：hahhaa
+Fri Sep  9 18:58:19 2022
+222222 yaoyao:今天天气很差，看来打不了球了，明天吧！
+Fri Sep  9 18:58:22 2022
+退出聊天大厅

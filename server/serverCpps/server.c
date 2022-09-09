@@ -1,33 +1,44 @@
-#include "server.h"
+#include "../serverHeaders/server.h"
 
 // 服务器结构体，存放服务器基本参数
-static struct server_t server;
+static server_t server;
 
-//创建的线程池
-static threadpool *pool = NULL;
-//保存服务器启动时即一直工作的两个线程号（接收客户端的连接，转发客户端的消息），回收资源时，直接取消这两个线程
-static pthread_t tid[2] = {0};
+int InitServerOptions(server_t *server)
+{
+    // 初始化服务器基本参数
+    server->sockfd = 0;
+    server->epfd = 0;
+    server->chat_maxfd = 0;
+    
+    // 初始化在线用户链表
+    server->usrs_online = CreateList();
+    pthread_mutex_init(&server->usrs_online_mutex, NULL);
 
-//数据库句柄
-static sqlite3 *ppdb = NULL;
-//数据库操作互斥量
-static pthread_mutex_t usrsdb_mutex = PTHREAD_MUTEX_INITIALIZER;
+    //初始化创建的线程池
+    server->pool = NULL;
 
-//文件指针（用于保存所有人的聊天信息）
-static FILE *ChatFp = NULL;
+    //初始化数据库句柄
+    server->usrsdb = NULL;
+    //数据库操作互斥量
+    pthread_mutex_init(&server->usrsdb_mutex, NULL);
+
+    //文件指针（用于保存所有人的聊天信息）
+    server->ChatFp = NULL;
+    // 文件指针操作互斥量
+    pthread_mutex_init(&server->ChatFp_mutex, NULL);
+
+    memset(&(server->events), 0, sizeof(server->events));
+    memset(&(server->usrs_chathall), 0, sizeof(server->usrs_chathall));
+    memset(&(server->workingfds), 0, sizeof(server->workingfds));
+
+    return 0;
+}
 
 int InitServer()
 {
     printf("服务器启动中...\n");
     // 初始化服务器基本参数
-    server.sockfd = 0;
-    server.epfd = 0;
-    server.chat_maxfd = 0;
-    server.login_maxfd = 0;
-    memset(&(server.events), 0, sizeof(server.events));
-    memset(&(server.usrs_chathall), 0, sizeof(server.usrs_chathall));
-    memset(&(server.usrs_online), 0, sizeof(server.usrs_online));
-    memset(&(server.workingfds), 0, sizeof(server.workingfds));
+    InitServerOptions(&server);
 
     //用于临时保存所调用函数的返回值判断是否发生了错误
     int ret, i;
@@ -36,8 +47,8 @@ int InitServer()
     char sql[128] = {0};
 
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
@@ -45,17 +56,17 @@ int InitServer()
         return FAILURE;
     }
     sprintf(sql, "create table if not exists usr(id char primary key, passwd char, name char);");
-    ret = sqlite3_exec(ppdb, sql, NULL, NULL, NULL);
+    ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_exec");
 
         return FAILURE;
     }
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
 
     /**
      * 基于ipv4，传输协议为TCP，无其他附加协议
@@ -127,23 +138,18 @@ int InitServer()
 
     //创建线程池
     //线程数量为10，任务队列最大长度为20
-    pool = threadpool_create(10, 20);
-    if (NULL == pool)
+    server.pool = threadpool_create(10, 20);
+    if (NULL == server.pool)
     {
         ERRLOG("threadpool_create");
 
         return FAILURE;
     }
-    //将监听客户端连接请求的任务添加到任务队列
-    thread_add_task(pool, AcceptClient, 0, NULL);
-    thread_add_task(pool, TransMsg, 0, NULL);
+    //处理客户端请求的任务添加到任务队列
+    thread_add_task(server.pool, TransMsg, 0, NULL);
 
     printf("服务器运行中...\n");
-    //防止main函数结束导致主线程结束
-    while (1)
-    {
-        sleep(50);
-    }
+    AcceptClient(0, NULL);
 }
 
 void CloseServer()
@@ -161,13 +167,9 @@ void CloseServer()
     close(server.sockfd);
     close(server.epfd);
     //关闭保存聊天信息的文件指针
-    fclose(ChatFp);
+    fclose(server.ChatFp);
     //取消一直工作的这两个线程(接收客户端的连接，转发客户端的消息）
-    for (i = 0; i < 2; i++)
-    {
-        pthread_cancel(tid[i]);
-    }
-    threadpool_destroy(pool);
+    threadpool_destroy(server.pool);
     printf("资源回收完成...\n");
     printf("服务器已关闭...\n");
     //结束主程序
@@ -184,8 +186,6 @@ void AcceptClient(const int recvfd, const void *recvinfo)
 
     int num, i, ret;
 
-    //保存一直工作的第一个线程的线程号(接收客户端的连接）
-    tid[0] = pthread_self();
     while (1)
     {
         //阻塞等待发生事件
@@ -234,17 +234,16 @@ void TransMsg(const int recvfd, const void *recvinfo)
 
     struct epoll_event ev;
 
-    //保存一直工作的第二个线程的线程号(转发客户端的消息）
-    tid[1] = pthread_self();
+    userlinklist *p;
 
     //打开保存聊天信息的文件，写入所有经服务器转发的信息
     // system("mkdir chattingrecords");
-    ChatFp = fopen("./chattingrecords/records.txt", "a+");
-    if (NULL == ChatFp)
+    server.ChatFp = fopen("./chattingrecords/records.txt", "a+");
+    if (NULL == server.ChatFp)
     {
         ERRLOG("fopen");
     }
-    fprintf(ChatFp, "\n");
+    fprintf(server.ChatFp, "\n");
 
     while (1)
     {
@@ -264,9 +263,9 @@ void TransMsg(const int recvfd, const void *recvinfo)
              * 数组中，则说明这是新的任务，添加到任务队列中
              *
              */
-            if ((0 == server.workingfds[server.events[i].data.fd]) && (server.events[i].data.fd != server.sockfd) && (server.events[i].events & EPOLLIN))
+
+            if ((server.events[i].data.fd != server.sockfd) && (server.events[i].events & EPOLLIN))
             {
-                memset(&buf, 0, sizeof(buf));
                 //接收消息
                 ret = recv(server.events[i].data.fd, &buf, sizeof(buf), 0);
                 if (-1 == ret)
@@ -280,10 +279,8 @@ void TransMsg(const int recvfd, const void *recvinfo)
                  */
                 else if (0 == ret)
                 {
-                    //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
-                    server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                     printf("客户端%d下线...\n", server.events[i].data.fd);
-                    thread_add_task(pool, ClearClient, server.events[i].data.fd, NULL);
+                    thread_add_task(server.pool, ClearClient, server.events[i].data.fd, NULL);
                 }
                 else
                 {
@@ -296,59 +293,59 @@ void TransMsg(const int recvfd, const void *recvinfo)
                     {
                     case U_LOGIN:
                         //登录
-                        thread_add_task(pool, Login, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, Login, server.events[i].data.fd, &buf);
                         break;
                     case U_REGISTER:
                         //注册
-                        thread_add_task(pool, Register, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, Register, server.events[i].data.fd, &buf);
                         break;
                     case U_CHATHALL:
                         //进入聊天大厅并进行聊天（默认群发）
-                        thread_add_task(pool, ChatHall, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, ChatHall, server.events[i].data.fd, &buf);
                         break;
                     case U_QUITCHAT:
                         //退出聊天大厅
-                        thread_add_task(pool, QuitChat, server.events[i].data.fd, NULL);
+                        thread_add_task(server.pool, QuitChat, server.events[i].data.fd, NULL);
                         break;
                     case U_PRIVATE_CHAT:
-                        thread_add_task(pool, PrivateChat, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, PrivateChat, server.events[i].data.fd, &buf);
                         break;
                     case U_VIEW_ONLINE:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(pool, ViewOnlineusers, server.events[i].data.fd, NULL);
+                        thread_add_task(server.pool, ViewOnlineusers, server.events[i].data.fd, NULL);
                         break;
                     case U_UPLOAD_FILE:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(pool, RecieveUploadFiles, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, RecieveUploadFiles, server.events[i].data.fd, &buf);
                         break;
                     case U_DOWN_FILE:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(pool, SendUploadFiles, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, SendUploadFiles, server.events[i].data.fd, &buf);
                         break;
                     case U_UPDATE_NAME:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(pool, UpdateName, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, UpdateName, server.events[i].data.fd, &buf);
                         break;
                     case U_RETRIEVE_PASSWD:
-                        thread_add_task(pool, RetrievePasswd, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, RetrievePasswd, server.events[i].data.fd, &buf);
                         break;
                     case U_UPDATE_PASSWD:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(pool, UpdatePasswd, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, UpdatePasswd, server.events[i].data.fd, &buf);
                         break;
                     case ADMIN_BANNING:
-                        thread_add_task(pool, Admin, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, Admin, server.events[i].data.fd, &buf);
                         break;
                     case ADMIN_DIS_BANNING:
-                        thread_add_task(pool, Admin, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, Admin, server.events[i].data.fd, &buf);
                         break;
                     case ADMIN_EXITUSR:
-                        thread_add_task(pool, Admin, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, Admin, server.events[i].data.fd, &buf);
                         break;
                     default:
                         break;
@@ -368,8 +365,10 @@ void ClearClient(const int recvfd, const void *recvinfo)
     int ret;
 
     //清空客户端相关的在线信息
-    memset(server.usrs_online[recvfd].id, 0, 6);
-    memset(server.usrs_online[recvfd].name, 0, 15);
+    LOCK(server.usrs_online_mutex);
+    EraseList(server.usrs_online, recvfd);
+    UNLOCK(server.usrs_online_mutex);
+
     server.usrs_chathall[recvfd] = 0;
     //将客户端的文件描述符从、epoll对象中移除
     memset(&ev, 0, sizeof(ev));
@@ -381,8 +380,6 @@ void ClearClient(const int recvfd, const void *recvinfo)
         ERRLOG("epoll_ctl");
     }
     close(recvfd);
-    //将此文件描述符从忙文件描述符数组中移除
-    server.workingfds[recvfd] = 0;
 }
 
 void Login(const int recvfd, const void *recvinfo)
@@ -400,8 +397,8 @@ void Login(const int recvfd, const void *recvinfo)
 
     //打开数据库
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (ret != SQLITE_OK)
     {
         ERRLOG("sqlite3_open");
@@ -409,16 +406,16 @@ void Login(const int recvfd, const void *recvinfo)
     memcpy(&buf, recvinfo, sizeof(buf));
     //同时查账号和密码，若查到数据，则说明账号密码正确登录成功
     snprintf(sql, 128, "select id,passwd,name from usr where id='%s' and passwd='%s';", buf.usr.id, buf.usr.passwd);
-    ret = sqlite3_get_table(ppdb, sql, &result, &row, &column, NULL);
+    ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &column, NULL);
     if (ret != SQLITE_OK)
     {
         ERRLOG("sqlite3_get_table");
     }
     //关闭数据库句柄并置空
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
 
     if (0 == row)
     {
@@ -439,11 +436,13 @@ void Login(const int recvfd, const void *recvinfo)
         //判断账号是否已经被登录
         int i;
 
-        for (i = 0; i <= server.login_maxfd; i++)
+        userlinklist *p = server.usrs_online->next;
+
+        while (p != NULL)
         {
             //若账号处于在线状态，则说明账号已经登录
             //返回字符'l'
-            if (0 == strcmp(server.usrs_online[i].id, result[3]))
+            if (0 == strncmp(p->user.id, result[3], 6))
             {
                 memset(&buf, 0, sizeof(buf));
                 buf.opt = U_LOGIN;
@@ -456,16 +455,15 @@ void Login(const int recvfd, const void *recvinfo)
 
                 return;
             }
-        }
-        //更新已经登录的用户的最大文件描述符
-        if (recvfd > server.login_maxfd)
-        {
-            server.login_maxfd = recvfd;
+            p = p->next;
         }
         // 根据客户端输入的账号密码查询到了数据
         // 核对信息正确后，客户端登录成功，把客户端的相关信息添加到线上
-        strcpy(server.usrs_online[recvfd].id, result[3]);
-        strcpy(server.usrs_online[recvfd].name, result[5]);
+        usrinfo usr;
+        init_usrinfo(&usr, result[3], NULL, result[5]);
+        LOCK(server.usrs_online_mutex);
+        InsertList(server.usrs_online, recvfd, usr);
+        UNLOCK(server.usrs_online_mutex);
 
         memset(&buf, 0, sizeof(buf));
         //将登录成功的消息's'以及有关客户端自身信息返回给客户端
@@ -501,8 +499,8 @@ void Register(const int recvfd, const void *recvinfo)
 
     //打开数据库
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
@@ -511,11 +509,11 @@ void Register(const int recvfd, const void *recvinfo)
     memcpy(&buf, recvinfo, sizeof(buf));
     //将数据插入数据库，若插入失败，则说明账号（主键）已存在
     snprintf(sql, 256, "insert into usr values('%s','%s','%s','%s');", buf.usr.id, buf.usr.passwd, buf.usr.name, buf.text);
-    ret = sqlite3_exec(ppdb, sql, NULL, NULL, NULL);
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
     {
@@ -575,7 +573,7 @@ void ChatHall(const int recvfd, const void *recvinfo)
     {
         //以字符串形式获取当前时间
         str_t = GetTime();
-        fprintf(ChatFp, "%s%s %s:%s\n", str_t, buf.usr.id, buf.usr.name, buf.text);
+        fprintf(server.ChatFp, "%s%s %s:%s\n", str_t, buf.usr.id, buf.usr.name, buf.text);
         //释放空间
         free(str_t);
         //指针释放指向空间后置空
@@ -620,26 +618,32 @@ void PrivateChat(const int recvfd, const void *recvinfo)
     // 0-5 |6| 23-
     struct info buf;
     struct info tmp;
+    userlinklist *usr;
 
     memcpy(&buf, recvinfo, sizeof(buf));
     //查找目标用户
     for (i = 0; i <= server.chat_maxfd; i++)
     {
         //将消息转发给目标用户
-        if (0 == strncmp(server.usrs_online[i].id, buf.text, 6))
+        if (0 == strncmp(server.usrs_online->user.id, buf.text, 6))
         {
             //若目标用户在聊天大厅内，则将消息发送给目标用户
             if (0 != server.usrs_chathall[i])
             {
                 str_t = GetTime();
-                fprintf(ChatFp, "%s%s %s --> %s\n", str_t, server.usrs_online[recvfd].id, server.usrs_online[recvfd].name, buf.text);
+
+                LOCK(server.usrs_online_mutex);
+                usr = GetNode_fd(server.usrs_online, recvfd);
+                UNLOCK(server.usrs_online_mutex);
+
+                fprintf(server.ChatFp, "%s%s %s --> %s\n", str_t, usr->user.id, usr->user.name, buf.text);
                 free(str_t);
                 str_t = NULL;
                 memset(&tmp, 0, sizeof(tmp));
                 // option=5，代表这是私聊消息
                 tmp.opt = U_PRIVATE_CHAT;
-                strncpy(tmp.usr.id, server.usrs_online[recvfd].id, 6);
-                strncpy(tmp.usr.name, server.usrs_online[recvfd].name, 15);
+                strncpy(tmp.usr.id, usr->user.id, 6);
+                strncpy(tmp.usr.name, usr->user.name, 15);
                 strncpy(tmp.text, buf.text + 7, sizeof(tmp.text) - 7);
                 ret = send(server.usrs_chathall[i], &tmp, sizeof(tmp), 0);
                 if (-1 == ret)
@@ -651,6 +655,7 @@ void PrivateChat(const int recvfd, const void *recvinfo)
             return;
         }
     }
+
 
     return;
 }
@@ -666,16 +671,18 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
     // option=6代表发送的是在线用户相关信息
     buf.opt = U_VIEW_ONLINE;
     //循环查询在线用户用户表
-    for (i = 0; i <= server.login_maxfd; i++)
+    userlinklist *p = server.usrs_online->next;
+
+    LOCK(server.usrs_online_mutex);
+
+    while (p != NULL)
     {
-        if (0 != strlen(server.usrs_online[i].id))
-        {
-            // 账号 |'\0'| 昵称 |'\0'| 账号 ...
-            strncpy(buf.text + index, server.usrs_online[i].id, 6);
-            index = index + 7;
-            strncpy(buf.text + index, server.usrs_online[i].name, 15);
-            index = index + 16;
-        }
+        // 账号 |'\0'| 昵称 |'\0'| 账号 ...
+        strncpy(buf.text + index, p->user.id, 6);
+        index = index + 7;
+        strncpy(buf.text + index, p->user.name, 15);
+        index = index + 16;
+        p = p->next;
     }
     //发送结果
     ret = send(recvfd, &buf, sizeof(buf), 0);
@@ -683,7 +690,6 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
     {
         ERRLOG("send");
     }
-    //将此文件描述符从忙文件描述符数组中移除
     server.workingfds[recvfd] = 0;
 }
 
@@ -697,11 +703,17 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
     //用于创建相应的文件
     char create_file[256] = {0};
 
+    userlinklist *p;
+
     //缓冲区
     struct info buf;
 
     //创建的新文件的文件指针
     FILE *recv_fp = NULL;
+
+    LOCK(server.usrs_online_mutex);
+    p = GetNode_fd(server.usrs_online, recvfd);
+    UNLOCK(server.usrs_online_mutex);
 
     memcpy(&buf, recvinfo, sizeof(buf));
     sprintf(create_file, "./usrsuploadfiles/%s", buf.text);
@@ -721,6 +733,7 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
          * 崩溃
          *
          */
+        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
         server.workingfds[recvfd] = 0;
 
         return;
@@ -960,20 +973,20 @@ void UpdateName(const int recvfd, const void *recvinfo)
     memcpy(&buf, recvinfo, sizeof(buf));
     //打开数据库句柄
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
     }
     //执行更新昵称的语句
     sprintf(sql, "update usr set name='%s' where id='%s';", buf.usr.name, buf.usr.id);
-    ret = sqlite3_exec(ppdb, sql, NULL, NULL, NULL);
+    ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
     //关闭数据库句柄
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
     {
@@ -1018,8 +1031,8 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
     memcpy(&buf, recvinfo, sizeof(buf));
     //打开数据库句柄
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
@@ -1027,12 +1040,12 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
     //将执行的sql语句放入sql数据中
     snprintf(sql, 256, "select passwd from usr where id='%s' and propasswd='%s';", buf.usr.id, buf.text);
     //执行sql语句并获取查询结果
-    ret = sqlite3_get_table(ppdb, sql, &result, &row, &col, NULL);
+    ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &col, NULL);
     //关闭数据库句柄
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
     {
@@ -1088,15 +1101,15 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
     memcpy(&buf, recvinfo, sizeof(buf));
     //打开数据库句柄
     //数据库操作前上锁
-    LOCK(usrsdb_mutex);
-    ret = sqlite3_open("./usrs/usrs.db", &ppdb);
+    LOCK(server.usrsdb_mutex);
+    ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
     }
     snprintf(sql, 256, "select passwd from usr where id='%s';", buf.usr.id);
     //执行sql语句
-    ret = sqlite3_get_table(ppdb, sql, &result, &row, &column, NULL);
+    ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &column, NULL);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_exec");
@@ -1134,7 +1147,7 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
             //执行修改密码的sql语句
             memset(sql, 0, sizeof(sql));
             snprintf(sql, 256, "update usr set passwd='%s' where id='%s' and passwd='%s';", buf.text, buf.usr.id, buf.usr.passwd);
-            ret = sqlite3_exec(ppdb, sql, NULL, NULL, NULL);
+            ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
             if (SQLITE_OK != ret)
             {
                 ERRLOG("sqlite3_exec");
@@ -1153,10 +1166,10 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
     //释放查询结果所占用的空间
     sqlite3_free_table(result);
     //关闭数据库句柄并置空
-    sqlite3_close(ppdb);
-    ppdb = NULL;
+    sqlite3_close(server.usrsdb);
+    server.usrsdb = NULL;
     //数据库操作后解锁
-    UNLOCK(usrsdb_mutex);
+    UNLOCK(server.usrsdb_mutex);
     //将此文件描述符从忙文件描述符数组中移除
     server.workingfds[recvfd] = 0;
 
@@ -1173,10 +1186,13 @@ void Admin(const int recvfd, const void *recvinfo)
     struct info buf;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    for (i = 0; i <= server.login_maxfd; i++)
+    
+    userlinklist *p = server.usrs_online->next;
+
+    while (p != NULL)
     {
         // 找到管理员进行操作的目的账号ID
-        if (0 == strcmp(buf.usr.id, server.usrs_online[i].id))
+        if (0 == strncmp(buf.usr.id, p->user.id, 6))
         {
             while (1)
             {
@@ -1205,6 +1221,7 @@ void Admin(const int recvfd, const void *recvinfo)
                 }
             }
         }
+        p = p->next;
     }
     // 没找到目的账号
     // 将结果发送给管理员
