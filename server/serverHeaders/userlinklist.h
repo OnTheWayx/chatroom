@@ -13,6 +13,9 @@ typedef struct userlinklist
 {
     int fd;
 
+    // 心跳计数
+    int heartcount;
+
     // 用户信息
     usrinfo user;
     // 用户打开的文件指针

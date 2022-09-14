@@ -2,6 +2,7 @@
     "files.associations": {
         "server.h": "c",
         "signal.h": "c",
-        "errno.h": "c"
+        "errno.h": "c",
+        "typeinfo": "c"
     }
 }

@@ -45,6 +45,7 @@ int InsertList(userlinklist *head, int fd, usrinfo info)
     }
     memset(new, sizeof(userlinklist), 0);
     new->fd = fd;
+    new->heartcount = 0;
     strcpy_usrinfo(&(new->user), &info);
     // 初始化文件指针
     new->file = NULL;

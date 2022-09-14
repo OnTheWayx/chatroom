@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -60,6 +61,10 @@ typedef struct server_t
 
     // 为验证账号是否在聊天大厅中的最大循环次数
     int chat_maxfd;
+
+    // 标识当前服务器是否处于关闭状态
+    int shutdown;
+
     // 存放发生事件的events数组
     struct epoll_event events[CLIENT_MAXSIZE];
 
@@ -121,6 +126,19 @@ void AcceptClient(const int recvfd, const void *recvinfo);
  * 参数无意义
  */
 void TransMsg(const int recvfd, const void *recvinfo);
+
+/**
+ * 负责处理在线用户的心跳检测
+ * 向所有在线用户发送心跳包
+ */
+void HeartBeatSend(const int recvfd, const void *recvinfo);
+
+/**
+ * 处理接收到的客户端回应的心跳包
+ * recvfd:回应的客户端的套接字描述符
+ * recvinfo:无意义
+ */
+void HeartBeatHandler(const int recvfd, const void *recvinfo);
 
 /**
  * @brief
@@ -322,7 +340,7 @@ void UpdatePasswd(const int recvfd, const void *recvinfo);
  * 若成功转发给了目的客户端，则向管理员方发送's'
  * 否则发送'f'
  *
- * @param recvfd 管理员登录客户端对应的文件描述符
+ * @param recvfd 管理员登录客户端对应的套接字文件描述符
  * @param recvinfo 接收到的打包好的消息，其中包括被禁言用户的账号ID
  */
 void Admin(const int recvfd, const void *recvinfo);

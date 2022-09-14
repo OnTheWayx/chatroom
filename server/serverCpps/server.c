@@ -9,6 +9,7 @@ int InitServerOptions(server_t *server)
     server->sockfd = 0;
     server->epfd = 0;
     server->chat_maxfd = 0;
+    server->shutdown = 0;
     
     // 初始化在线用户链表
     server->usrs_online = CreateList();
@@ -83,6 +84,16 @@ int InitServer()
     int opt = 1;
     setsockopt(server.sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    // 设置套接字为非阻塞模式
+    
+    int flags;
+    if ((flags = fcntl(server.sockfd, F_GETFL, NULL)) < 0) {
+        return -1;
+    }
+    if (fcntl(server.sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        return -1;
+    }
+
     //填充网络信息结构体，保存服务器信息
     struct sockaddr_in server_addr;
     socklen_t server_len = sizeof(server_addr);
@@ -147,6 +158,7 @@ int InitServer()
     }
     //处理客户端请求的任务添加到任务队列
     thread_add_task(server.pool, TransMsg, 0, NULL);
+    thread_add_task(server.pool, HeartBeatSend, 0, NULL);
 
     printf("服务器运行中...\n");
     AcceptClient(0, NULL);
@@ -154,6 +166,7 @@ int InitServer()
 
 void CloseServer()
 {
+    server.shutdown = 1;
     struct epoll_event ev;
 
     int i;
@@ -186,14 +199,19 @@ void AcceptClient(const int recvfd, const void *recvinfo)
 
     int num, i, ret;
 
-    while (1)
+    while (!server.shutdown)
     {
-        //阻塞等待发生事件
-        num = epoll_wait(server.epfd, server.events, CLIENT_MAXSIZE, -1);
+        // 每10毫秒等待是否有事件发生
+        num = epoll_wait(server.epfd, server.events, CLIENT_MAXSIZE, 10);
         if (-1 == num)
         {
             ERRLOG("epoll_wait");
             printf("%d\n", errno);
+        }
+        else if (0 == num)
+        {
+            // 无时间发生，继续循环
+            continue;
         }
 
         for (i = 0; i < num; i++)
@@ -245,13 +263,18 @@ void TransMsg(const int recvfd, const void *recvinfo)
     }
     fprintf(server.ChatFp, "\n");
 
-    while (1)
+    while (!server.shutdown)
     {
-        //阻塞等待发生时间
-        num = epoll_wait(server.epfd, server.events, CLIENT_MAXSIZE, -1);
+        // 每10毫秒等待是否有事件发生
+        num = epoll_wait(server.epfd, server.events, CLIENT_MAXSIZE, 10);
         if (-1 == num)
         {
             ERRLOG("epoll_wait");
+        }
+        else if (0 == num)
+        {
+            // 无时间发生，继续循环
+            continue;
         }
 
         for (i = 0; i < num; i++)
@@ -267,10 +290,19 @@ void TransMsg(const int recvfd, const void *recvinfo)
             if ((server.events[i].data.fd != server.sockfd) && (server.events[i].events & EPOLLIN))
             {
                 //接收消息
-                ret = recv(server.events[i].data.fd, &buf, sizeof(buf), 0);
+                ret = recv(server.events[i].data.fd, &buf, sizeof(buf), MSG_DONTWAIT);
                 if (-1 == ret)
                 {
-                    ERRLOG("recv");
+                    if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+                    {
+                        // 处理错误
+                        ERRLOG("recv");
+                    }
+                    else
+                    {
+                        usleep(50000);
+                        continue;
+                    }
                 }
                 /**
                  * 若recv返回0，则说明有客户端退出
@@ -280,7 +312,8 @@ void TransMsg(const int recvfd, const void *recvinfo)
                 else if (0 == ret)
                 {
                     printf("客户端%d下线...\n", server.events[i].data.fd);
-                    thread_add_task(server.pool, ClearClient, server.events[i].data.fd, NULL);
+                    // thread_add_task(server.pool, ClearClient, server.events[i].data.fd, NULL);
+                    ClearClient(server.events[i].data.fd, NULL);
                 }
                 else
                 {
@@ -347,6 +380,9 @@ void TransMsg(const int recvfd, const void *recvinfo)
                     case ADMIN_EXITUSR:
                         thread_add_task(server.pool, Admin, server.events[i].data.fd, &buf);
                         break;
+                    case HEARTBEAT:
+                        thread_add_task(server.pool, HeartBeatHandler, server.events[i].data.fd, NULL);
+                        break;
                     default:
                         break;
                     }
@@ -356,6 +392,74 @@ void TransMsg(const int recvfd, const void *recvinfo)
         //每轮询完一遍发生的事件数组，睡眠0.05秒
         usleep(50000);
     }
+}
+
+void HeartBeatSend(const int recvfd, const void *recvinfo)
+{
+    // 向所有在线用户发送心跳包
+    struct info send_info;
+    int ret;
+    userlinklist *tmp;
+
+    memset(&send_info, 0, sizeof(send_info));
+    send_info.opt = HEARTBEAT;
+
+    while (!server.shutdown)
+    {
+        // 对在线用户链表加锁
+        LOCK(server.usrs_online_mutex);
+        userlinklist *p = server.usrs_online->next;
+        while (p != NULL)
+        {
+            printf("fd:%d\n", p->fd);
+            ret = send(p->fd, &send_info, sizeof(send_info), 0);
+            if (-1 == ret)
+            {
+                ERRLOG("send");
+            }
+            if (p->heartcount < 5)
+            {
+                p->heartcount++;
+                p = p->next;
+            }
+            else if (p->heartcount == 5)
+            {   // 客户端多次未回应，说明客户端已掉线，将其从在线用户链表中删除
+                printf("client %d is offline.\n", p->fd);
+                tmp = p->next;
+                // ClearClient内部会加锁
+                // 为了防止死锁，先解锁
+                UNLOCK(server.usrs_online_mutex);
+                ClearClient(p->fd, NULL);
+                LOCK(server.usrs_online_mutex);
+                p = tmp;
+            }
+            else
+            {
+                p = p->next;
+            }
+        }
+        UNLOCK(server.usrs_online_mutex);
+        printf("HeartBeatCheck...\n");
+        sleep(3);
+    }
+}
+
+void HeartBeatHandler(const int recvfd, const void *recvinfo)
+{
+    LOCK(server.usrs_online_mutex);
+    userlinklist *p = server.usrs_online->next;
+
+    printf("HeartBeatCheck Response:%d\n", recvfd);
+    while (p != NULL)
+    {
+        if (p->fd == recvfd)
+        {
+            p->heartcount = 0;
+            break;
+        }
+        p = p->next;
+    }
+    UNLOCK(server.usrs_online_mutex);
 }
 
 void ClearClient(const int recvfd, const void *recvinfo)
@@ -436,8 +540,8 @@ void Login(const int recvfd, const void *recvinfo)
         //判断账号是否已经被登录
         int i;
 
+        LOCK(server.usrs_online_mutex);
         userlinklist *p = server.usrs_online->next;
-
         while (p != NULL)
         {
             //若账号处于在线状态，则说明账号已经登录
@@ -457,6 +561,7 @@ void Login(const int recvfd, const void *recvinfo)
             }
             p = p->next;
         }
+        UNLOCK(server.usrs_online_mutex);
         // 根据客户端输入的账号密码查询到了数据
         // 核对信息正确后，客户端登录成功，把客户端的相关信息添加到线上
         usrinfo usr;
@@ -545,7 +650,7 @@ void Register(const int recvfd, const void *recvinfo)
 
 void ChatHall(const int recvfd, const void *recvinfo)
 {
-    int i, ret;
+    int ret;
 
     //复制客户端发送的消息
     struct info buf;
@@ -553,12 +658,9 @@ void ChatHall(const int recvfd, const void *recvinfo)
     //用于以字符串形式获取当前时间
     char *str_t = NULL;
 
+    userlinklist *p = NULL;
+
     memcpy(&buf, recvinfo, sizeof(buf));
-    //记录下最大的文件描述符，减少循环次数
-    if (recvfd > server.chat_maxfd)
-    {
-        server.chat_maxfd = recvfd;
-    }
     /*
         当客户端第一次进入聊天大厅时，则更新进入聊天大厅
         的客户端的信息（从服务器记录的登录的客户端的信息中获得）
@@ -578,18 +680,23 @@ void ChatHall(const int recvfd, const void *recvinfo)
         free(str_t);
         //指针释放指向空间后置空
         str_t = NULL;
-        for (i = 0; i <= server.chat_maxfd; i++)
+
+        LOCK(server.usrs_online_mutex);
+        p = server.usrs_online->next;
+        while (p != NULL)
         {
             //将消息转发给聊天大厅内的用户（除了自己）
-            if (0 != server.usrs_chathall[i] && server.usrs_chathall[i] != recvfd)
+            if (0 != server.usrs_chathall[p->fd] && p->fd != recvfd)
             {
-                ret = send(server.usrs_chathall[i], &buf, sizeof(buf), 0);
+                ret = send(server.usrs_chathall[p->fd], &buf, sizeof(buf), 0);
                 if (-1 == ret)
                 {
                     ERRLOG("send");
                 }
             }
+            p = p->next;
         }
+        UNLOCK(server.usrs_online_mutex);
     }
 
     return;
@@ -606,8 +713,7 @@ void QuitChat(const int recvfd, const void *recvinfo)
 
 void PrivateChat(const int recvfd, const void *recvinfo)
 {
-    int i, ret;
-    int index = 0;
+    int ret;
 
     //以字符串形式获取当前系统时间
     char *str_t;
@@ -618,17 +724,18 @@ void PrivateChat(const int recvfd, const void *recvinfo)
     // 0-5 |6| 23-
     struct info buf;
     struct info tmp;
-    userlinklist *usr;
+    userlinklist *usr, *p;
 
     memcpy(&buf, recvinfo, sizeof(buf));
     //查找目标用户
-    for (i = 0; i <= server.chat_maxfd; i++)
+    p = server.usrs_online->next;
+    while (p != NULL)
     {
         //将消息转发给目标用户
-        if (0 == strncmp(server.usrs_online->user.id, buf.text, 6))
+        if (0 == strncmp(p->user.id, buf.text, 6))
         {
             //若目标用户在聊天大厅内，则将消息发送给目标用户
-            if (0 != server.usrs_chathall[i])
+            if (0 != server.usrs_chathall[p->fd])
             {
                 str_t = GetTime();
 
@@ -645,7 +752,7 @@ void PrivateChat(const int recvfd, const void *recvinfo)
                 strncpy(tmp.usr.id, usr->user.id, 6);
                 strncpy(tmp.usr.name, usr->user.name, 15);
                 strncpy(tmp.text, buf.text + 7, sizeof(tmp.text) - 7);
-                ret = send(server.usrs_chathall[i], &tmp, sizeof(tmp), 0);
+                ret = send(p->fd, &tmp, sizeof(tmp), 0);
                 if (-1 == ret)
                 {
                     ERRLOG("send");
@@ -654,8 +761,8 @@ void PrivateChat(const int recvfd, const void *recvinfo)
 
             return;
         }
+        p = p->next;
     }
-
 
     return;
 }
@@ -670,11 +777,10 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
     memset(&buf, 0, sizeof(buf));
     // option=6代表发送的是在线用户相关信息
     buf.opt = U_VIEW_ONLINE;
+
     //循环查询在线用户用户表
-    userlinklist *p = server.usrs_online->next;
-
     LOCK(server.usrs_online_mutex);
-
+    userlinklist *p = server.usrs_online->next;
     while (p != NULL)
     {
         // 账号 |'\0'| 昵称 |'\0'| 账号 ...
@@ -684,6 +790,7 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
         index = index + 16;
         p = p->next;
     }
+    UNLOCK(server.usrs_online_mutex);
     //发送结果
     ret = send(recvfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
@@ -992,8 +1099,10 @@ void UpdateName(const int recvfd, const void *recvinfo)
     {
         //向客户端发送昵称修改失败的结果
         ERRLOG("sqlite3_exec");
-        update_result = 'f';
-        ret = send(recvfd, &update_result, sizeof(update_result), 0);
+        memset(&buf, 0, sizeof(buf));
+        buf.opt = U_UPDATE_NAME;
+        buf.text[0] = 'f';
+        ret = send(recvfd, &buf, sizeof(buf), 0);
         if (-1 == ret)
         {
             ERRLOG("send");
@@ -1002,8 +1111,10 @@ void UpdateName(const int recvfd, const void *recvinfo)
     else
     {
         //向客户端发送昵称修改成功的结果
-        update_result = 's';
-        ret = send(recvfd, &update_result, sizeof(update_result), 0);
+        memset(&buf, 0, sizeof(buf));
+        buf.opt = U_UPDATE_NAME;
+        buf.text[0] = 's';
+        ret = send(recvfd, &buf, sizeof(buf), 0);
         if (-1 == ret)
         {
             ERRLOG("send");
@@ -1121,8 +1232,10 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         {
             //若输入的原密码错误，则向客户端发送'f'
             //修改密码失败，说明客户端输入的参数有误，将消息发送给客户端
-            update_result = 'f';
-            ret = send(recvfd, &update_result, sizeof(update_result), 0);
+            memset(&buf, 0, sizeof(buf));
+            buf.opt = U_UPDATE_PASSWD;
+            buf.text[0] = 'f';
+            ret = send(recvfd, &buf, sizeof(buf), 0);
             if (-1 == ret)
             {
                 ERRLOG("send");
@@ -1133,8 +1246,10 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         {
             //若输入的原密码正确但新密码与原来的密码一样，则向客户端发送'e'
             //修改密码失败，客户端输入的新密码与原密码相同
-            update_result = 'e';
-            ret = send(recvfd, &update_result, sizeof(update_result), 0);
+            memset(&buf, 0, sizeof(buf));
+            buf.opt = U_UPDATE_PASSWD;
+            buf.text[0] = 'e';
+            ret = send(recvfd, &buf, sizeof(buf), 0);
             if (-1 == ret)
             {
                 ERRLOG("send");
@@ -1153,8 +1268,10 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
                 ERRLOG("sqlite3_exec");
             }
             //修改密码成功
-            update_result = 's';
-            ret = send(recvfd, &update_result, sizeof(update_result), 0);
+            memset(&buf, 0, sizeof(buf));
+            buf.opt = U_UPDATE_PASSWD;
+            buf.text[0] = 's';
+            ret = send(recvfd, &buf, sizeof(buf), 0);
             if (-1 == ret)
             {
                 ERRLOG("send");
@@ -1210,8 +1327,10 @@ void Admin(const int recvfd, const void *recvinfo)
                         ERRLOG("send");
                     }
                     // 将结果发送给管理员
-                    admin_result = 's';
-                    ret = send(recvfd, &admin_result, sizeof(admin_result), 0);
+                    memset(&buf, 0, sizeof(buf));
+                    buf.opt = ADMIN_RET;
+                    buf.text[0] = 's';
+                    ret = send(recvfd, &buf, sizeof(buf), 0);
                     if (-1 == ret)
                     {
                         ERRLOG("send");
@@ -1220,13 +1339,16 @@ void Admin(const int recvfd, const void *recvinfo)
                     return;
                 }
             }
+            break;
         }
         p = p->next;
     }
     // 没找到目的账号
     // 将结果发送给管理员
-    admin_result = 'f';
-    ret = send(recvfd, &admin_result, sizeof(admin_result), 0);
+    memset(&buf, 0, sizeof(buf));
+    buf.opt = ADMIN_RET;
+    buf.text[0] = 'f';
+    ret = send(recvfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
         ERRLOG("send");
