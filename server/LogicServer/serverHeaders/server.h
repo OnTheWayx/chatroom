@@ -263,18 +263,17 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo);
 
 /**
  * @brief
- * SendUploadFiles函数
- * 用户信息结构体无内容
- * 接收到客户端下载文件的请求后，先向客户端发送所有可下载文件的文件名
- *
- * 然后等待客户端选择，接收客户端输入的文件名，若文件存在，则
- * 先发送'e'告知客户端文件存在，然后进行传输，传输结束后，发送's'
- * 若文件不存在，则发送'n'
+ * 向客户端发送可供下载文件的文件名
  *
  * @param recvfd 请求下载文件的客户端的文件描述符
  * @param recvinfo
  */
-void SendUploadFiles(const int recvfd, const void *recvinfo);
+void SendFileName(const int recvfd, const void *recvinfo);
+
+/**
+ * 向客户发送所要下载文件是否存在的结果
+ */
+void SendFileIsExist(const int recvfd, const void *recvinfo);
 
 /**
  * @brief

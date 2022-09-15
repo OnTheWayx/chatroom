@@ -1,5 +1,5 @@
 TARGET:=server
-SOURCE:=./threadpool/threadpool.c ./serverCpps/*.c
+SOURCE:=./threadpool/threadpool.c ./serverCs/*.c
 CC:=gcc 
 CCFLAGS:=-o
 LINK:=-lpthread -lsqlite3

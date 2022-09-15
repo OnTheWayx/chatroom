@@ -28,7 +28,7 @@ void StartAnimation()
     printf("\n");
 }
 
-int ConnectServer()
+int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
 {
     // 初始化客户端基本参数
     client.client_shutdown = 0;
@@ -38,6 +38,9 @@ int ConnectServer()
     memset(&(client.myinfo), 0, sizeof(client.myinfo));
     client.cur = 12;
     client.ChatFp = NULL;
+    client.server_ip = ip;
+    client.server_port = port;
+    client.server_file_port = file_port;
 
     //用于临时保存所调用函数的返回值判断是否发生了错误
     int ret;
@@ -53,18 +56,29 @@ int ConnectServer()
 
     memset(&server_addr, 0, server_len);
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server_addr.sin_port = htons(8888);
+    server_addr.sin_addr.s_addr = inet_addr(client.server_ip);
+    server_addr.sin_port = htons(client.server_port);
+
 
     //连接至服务器
     ret = connect(client.sockfd, (struct sockaddr *)&server_addr, server_len);
     if (-1 == ret)
     {
         ERRLOG("connect");
-
+        printf("%d\n", __LINE__);
         return FAILURE;
     }
     printf("连接服务器成功...\n");
+    
+    // 设置套接字为非阻塞
+    int flags = fcntl(client.sockfd, F_GETFL);
+    flags |= O_NONBLOCK;
+    ret = fcntl(client.sockfd, F_SETFL, flags);
+    if (ret == -1)
+    {
+        fprintf(stderr, "设置套接字为非阻塞模式失败.\n");
+        return FAILURE;
+    }
     usleep(300000);
 
     return SUCCESS;
@@ -134,12 +148,24 @@ int Login()
     }
     //清空缓冲区buf，用于接收消息
     memset(&buf, 0, sizeof(buf));
-    ret = recv(client.sockfd, &buf, sizeof(buf), 0);
-    if (-1 == ret)
+    //接收服务器发送的结果
+    while (1)
     {
-        ERRLOG("recv");
-
-        return FAILURE;
+        ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
+        if (ret == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            {
+                // 睡眠0.1秒并继续返回循环
+                usleep(100000);
+                continue;
+            }
+            fprintf(stderr, "recv data error.\n");
+        }
+        else
+        {
+            break;
+        }
     }
     // buf.text[0] = 'f'则说明登录失败，账号或密码错误
     if (U_LOGIN == buf.opt && 'f' == buf.text[0])
@@ -296,13 +322,25 @@ int Register()
         return FAILURE;
     }
     //接收服务器发送的结果
-    ret = recv(client.sockfd, &buf, sizeof(buf), 0);
-    if (-1 == ret)
+    while (1)
     {
-        ERRLOG("recv");
-
-        return FAILURE;
+        ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
+        if (ret == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            {
+                // 睡眠0.1秒并继续返回循环
+                usleep(100000);
+                continue;
+            }
+            fprintf(stderr, "recv data error.\n");
+        }
+        else
+        {
+            break;
+        }
     }
+    
     //注册失败，账号已存在
     if (U_REGISTER == buf.opt && 'f' == buf.text[0])
     {
@@ -327,9 +365,18 @@ void *logic_recv_handler(void *arg)
     while (1)
     {
         memset(&buf, 0, sizeof(buf));
-        ret = recv(client.sockfd, &buf, sizeof(buf), 0);
+        ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
         if (ret == -1)
         {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            {
+                // 定时回收子进程
+                waitpid(-1, NULL, WNOHANG);
+
+                // 睡眠0.1秒并继续返回循环
+                usleep(100000);
+                continue;
+            }
             fprintf(stderr, "recv data error.\n");
         }
         else if (ret == 0)
@@ -361,6 +408,12 @@ void *logic_recv_handler(void *arg)
                 break;
             case HEARTBEAT:
                 RecvHeartBeat();
+                break;
+            case U_VIEW_FILE:
+                DisplayViewFileName(&buf);
+                break;
+            case U_DOWN_FILE:
+                RecvFileIsExist(&buf);
                 break;
             default:
                 break;
@@ -1129,200 +1182,50 @@ void ViewChattingRecords()
 //     fclose(send_fp);
 // }
 
-// void DownloadFiles()
-// {
-//     // recv p操作
-//     sem_wait(&sem_recv);
+void ViewDownloadFiles()
+{
+    int ret, filesize, tmp;
 
-//     int ret, tmp;
-//     //接收文件剩余字节数
-//     unsigned int filesize = 0;
+    info myinfo;
 
-//     //接收文件缓冲区
-//     struct info buf;
+    printf("可供下载文件.\n");
+    system("clear");
+    myinfo.opt = U_VIEW_FILE;
+    send(client.sockfd, &myinfo, sizeof(myinfo), 0);
+}
 
-//     char isexist;
-//     char recvresult;
-//     //文件名
-//     char filename[128] = {0};
-//     char tmp_recv_file[256] = {0};
+void DisplayViewFileName(info *recvinfo)
+{   
+    printf("%s\n", recvinfo->text);
+}
 
-//     //作为下载文件的文件指针
-//     FILE *fp = NULL;
+void SendDownloadFileName()
+{
+    info myinfo;
 
-//     memset(&buf, 0, sizeof(buf));
-//     // option=8，下载客户端文件
-//     buf.opt = U_DOWN_FILE;
+    memset(&myinfo, 0, sizeof(myinfo));
+    myinfo.opt = U_DOWN_FILE;
+    printf("请输入要下载的文件名：\n");
+    scanf("%s", myinfo.text);
 
-//     //向服务器请求要下载文件
-//     ret = send(client.sockfd, &buf, sizeof(buf), 0);
-//     if (-1 == ret)
-//     {
-//         ERRLOG("send");
-//         // recv v操作
-//         sem_post(&(sem_recv));
+    // 发送要下载的文件名
+    send(client.sockfd, &myinfo, sizeof(myinfo), 0);
+}
 
-//         return;
-//     }
+void RecvFileIsExist(info *recvinfo)
+{
+    downfileinfo *info = (downfileinfo *)recvinfo;
 
-//     system("clear");
-//     printf("可下载文件\n");
-//     //服务器返回在可下载文件的文件名，打印出文件名
-
-//     //接收存放可下载文件名的文件的大小
-//     ret = recv(client.sockfd, &filesize, sizeof(filesize), 0);
-//     if (-1 == ret)
-//     {
-//         ERRLOG("recv");
-//     }
-
-//     while (1)
-//     {
-//         char recvfile_buf[1024] = {0};
-
-//         if (0 == filesize)
-//         {
-//             break;
-//         }
-//         /**
-//          * @brief
-//          * 若是剩余字节数大于接收缓冲区大小
-//          * 则一次接收缓冲区大小的字节数
-//          * 否则仅接收剩余字节数
-//          */
-//         if (filesize > sizeof(recvfile_buf))
-//         {
-//             tmp = recv(client.sockfd, recvfile_buf, sizeof(recvfile_buf), 0);
-//         }
-//         else
-//         {
-//             tmp = recv(client.sockfd, recvfile_buf, filesize, 0);
-//         }
-//         if (-1 == tmp)
-//         {
-//             ERRLOG("recv");
-//         }
-//         //直接打印出接收内容（可下载文件的文件名）
-//         printf("%s", recvfile_buf);
-//         //更新剩余字节数
-//         filesize -= tmp;
-//     }
-//     //输入要下载文件的文件名
-//     printf("请输入待下载文件的文件名：");
-//     scanf("%s", filename);
-
-//     //向服务器发送要下载文件的文件名
-//     ret = send(client.sockfd, filename, sizeof(filename), 0);
-//     if (-1 == ret)
-//     {
-//         ERRLOG("send");
-//     }
-
-//     //接收服务器发送的文件是否存在的结果
-//     ret = recv(client.sockfd, &isexist, sizeof(isexist), 0);
-//     if (-1 == ret)
-//     {
-//         ERRLOG("recv");
-//     }
-//     //若接收到的消息为'n'，则说明文件不存在，直接返回
-//     if ('n' == isexist)
-//     {
-//         printf("文件不存在...\n两秒后返回主页面\n");
-//         sleep(2);
-//     }
-//     //服务器通知文件存在，开始下载
-//     else if ('y' == isexist)
-//     {
-//         //接收要下载文件的大小
-//         ret = recv(client.sockfd, &filesize, sizeof(filesize), 0);
-//         if (-1 == ret)
-//         {
-//             ERRLOG("recv");
-//         }
-//         // printf("filesize is %d\n", filesize);
-//         printf("文件存在，开始下载...\n");
-
-//         printf("%s\n", client.myinfo.id);
-//         //创建存储个人文件的专属目录（若不存在则创建）
-//         memset(tmp_recv_file, 0, sizeof(tmp_recv_file));
-//         sprintf(tmp_recv_file, "mkdir %s", client.myinfo.id);
-//         system(tmp_recv_file);
-//         //创建存储下载文件的目录（若不存在则创建）
-//         memset(tmp_recv_file, 0, sizeof(tmp_recv_file));
-//         sprintf(tmp_recv_file, "mkdir ./%s/mydownloadfiles", client.myinfo.id);
-//         system(tmp_recv_file);
-
-//         //开始下载文件
-//         memset(tmp_recv_file, 0, sizeof(tmp_recv_file));
-//         sprintf(tmp_recv_file, "./%s/mydownloadfiles/%s", client.myinfo.id, filename);
-//         fp = fopen(tmp_recv_file, "w");
-//         if (NULL == fp)
-//         {
-//             ERRLOG("fopen");
-//         }
-
-//         //开始接受文件
-//         while (1)
-//         {
-//             char recvfile_buf[1024] = {0};
-
-//             //剩余字节数为0，说明文件接收完毕，退出循环
-//             if (0 == filesize)
-//             {
-//                 printf("文件传输结束\n");
-//                 break;
-//             }
-//             /**
-//              * @brief
-//              * 若是剩余字节数大于接收缓冲区大小
-//              * 则一次接收缓冲区大小的字节数
-//              * 否则仅接收剩余字节数
-//              */
-//             if (filesize > sizeof(recvfile_buf))
-//             {
-//                 tmp = recv(client.sockfd, recvfile_buf, sizeof(recvfile_buf), 0);
-//             }
-//             else
-//             {
-//                 tmp = recv(client.sockfd, recvfile_buf, filesize, 0);
-//             }
-//             if (-1 == tmp)
-//             {
-//                 ERRLOG("recv");
-//             }
-//             fwrite(recvfile_buf, tmp, 1, fp);
-//             //更新剩余字节数
-//             filesize -= tmp;
-//             // printf("tmp is %d\n", tmp);
-//             // printf("filesize is %d\n", filesize);
-//         }
-//         //接收服务器的确认消息
-//         ret = recv(client.sockfd, &recvresult, sizeof(recvresult), 0);
-//         if (-1 == ret)
-//         {
-//             ERRLOG("recv");
-//         }
-//         if ('s' == recvresult)
-//         {
-//             printf("文件下载成功...\n");
-//         }
-//         printf("\033[31;85H按回车键返回\n");
-//         while (1)
-//         {
-//             if (getchar())
-//             {
-//                 break;
-//             }
-//             sleep(2);
-//         }
-
-//         fclose(fp);
-//     }
-//     // recv v操作
-//     sem_post(&sem_recv);
-
-//     return;
-// }
+    if (info->_fill[0] == 'f')
+    {
+        printf("文件不存在，下载失败.\n");
+    }
+    else
+    {
+        printf("后台开始下载文件...\n");
+        // 开始下载文件
+    }
+}
 
 void UpdateName()
 {
@@ -1477,10 +1380,24 @@ void RetrievePasswd()
     }
 
     //接收服务器的回应
-    ret = recv(client.sockfd, &buf, sizeof(buf), 0);
-    if (-1 == ret)
+    //接收服务器发送的结果
+    while (1)
     {
-        ERRLOG("recv");
+        ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
+        if (ret == -1)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            {
+                // 睡眠0.1秒并继续返回循环
+                usleep(100000);
+                continue;
+            }
+            fprintf(stderr, "recv data error.\n");
+        }
+        else
+        {
+            break;
+        }
     }
     //若收到了'f'，则说明密保问题回答错误，否则说明找回密码成功并打印
     if ((U_RETRIEVE_PASSWD == buf.opt) && (1 == strlen(buf.text)) && 'f' == buf.text[0])

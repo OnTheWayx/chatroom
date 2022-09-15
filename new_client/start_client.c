@@ -8,7 +8,7 @@ int main(int argc, char const *argv[])
     //开始运行时动画
     StartAnimation();
     //连接至服务器
-    ret = ConnectServer();
+    ret = ConnectServer("127.0.0.1", 8888, 9999);
     if (SUCCESS != ret)
     {
         printf("连接服务器失败...\n");
@@ -104,7 +104,8 @@ LOGIN:
             break;
         case 5:
             //从服务器下载文件
-            // DownloadFiles();
+            ViewDownloadFiles();
+            SendDownloadFileName();
             break;
         case 6:
             //修改昵称

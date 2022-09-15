@@ -10,6 +10,7 @@ enum option
     U_QUITCHAT,
     U_PRIVATE_CHAT,
     U_VIEW_ONLINE,
+    U_VIEW_FILE,
     U_UPLOAD_FILE,
     U_DOWN_FILE,
     U_UPDATE_NAME,
@@ -27,6 +28,7 @@ enum option
      * opt = U_QUITCHAT --- 退出聊天大厅
      * opt = U_PRIVATE_CHAT --- 客户端间私聊
      * opt = U_VIEW_ONLINE --- 查看在线用户
+     * opt = U_VIEW_FILE -- 查看可供下载文件
      * opt = U_UPLOAD_FILE --- 上传文件
      * opt = U_DOWN_FILE --- 下载文件
      * opt = U_UPDATE_NAME --- 修改昵称

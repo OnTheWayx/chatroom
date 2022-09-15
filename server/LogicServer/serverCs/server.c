@@ -353,10 +353,12 @@ void TransMsg(const int recvfd, const void *recvinfo)
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                         thread_add_task(server.pool, RecieveUploadFiles, server.events[i].data.fd, &buf);
                         break;
+                    case U_VIEW_FILE:
+                        thread_add_task(server.pool, SendFileName, server.events[i].data.fd, &buf);
+                        break;
                     case U_DOWN_FILE:
-                        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
-                        server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
-                        thread_add_task(server.pool, SendUploadFiles, server.events[i].data.fd, &buf);
+                        thread_add_task(server.pool, SendFileIsExist, server.events[i].data.fd, &buf);
+                        // ...
                         break;
                     case U_UPDATE_NAME:
                         //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
@@ -557,6 +559,7 @@ void Login(const int recvfd, const void *recvinfo)
                     ERRLOG("send");
                 }
 
+                UNLOCK(server.usrs_online_mutex);
                 return;
             }
             p = p->next;
@@ -901,7 +904,7 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
     return;
 }
 
-void SendUploadFiles(const int recvfd, const void *recvinfo)
+void SendFileName(const int recvfd, const void *recvinfo)
 {
     int ret, tmp;
     //发送文件剩余字节数
@@ -918,7 +921,7 @@ void SendUploadFiles(const int recvfd, const void *recvinfo)
     char tmp_send_file[256] = {0};
 
     //查看可下载文件目录下的所有文件，输出重定位到files.txt
-    system("ls ./usrsuploadfiles > files.txt");
+    system("ls ../FileServer/usrsuploadfiles > files.txt");
     //以只读方式打开files.txt
     fp_name = fopen("files.txt", "r");
     if (NULL == fp_name)
@@ -933,136 +936,68 @@ void SendUploadFiles(const int recvfd, const void *recvinfo)
          * 崩溃
          *
          */
-        server.workingfds[recvfd] = 0;
-
         return;
     }
 
-    //获取files.txt文件字节数
     fseek(fp_name, 0, SEEK_END);
+    // 获得文件长度
     filesize = ftell(fp_name);
+    // 重置文件指针位置
     fseek(fp_name, 0, SEEK_SET);
 
-    //将files.txt文件大小发送给客户端
-    ret = send(recvfd, &filesize, sizeof(filesize), 0);
-    if (-1 == ret)
-    {
-        ERRLOG("send");
-    }
-
-    //将files.txt文件内容发送给客户端
+    //将files.txt文件内容分包发送给客户端
     while (1)
     {
-        char sendfile_buf[1024] = {0};
+        info myinfo;
 
+        memset(&myinfo, 0, sizeof(myinfo));
         if (0 == filesize)
         {
             break;
         }
-        tmp = fread(sendfile_buf, 1, sizeof(sendfile_buf), fp_name);
-        tmp = send(recvfd, sendfile_buf, tmp, 0);
+        myinfo.opt = U_VIEW_FILE;
+        tmp = fread(myinfo.text, 1, sizeof(myinfo.text), fp_name);
+        filesize -= tmp;
         if (-1 == tmp)
         {
             ERRLOG("send");
         }
-        filesize -= tmp;
+        send(recvfd, &myinfo, sizeof(myinfo), 0);
     }
     //关闭中间文件files.txt文件指针并删除文件
     fclose(fp_name);
     system("rm files.txt");
+}
 
-    //接收客户端要下载文件的文件名
-    ret = recv(recvfd, filename, sizeof(filename), 0);
-    if (-1 == ret)
-    {
-        ERRLOG("recv");
-    }
+void SendFileIsExist(const int recvfd, const void *recvinfo)
+{
+    char filename[BUF_MAXSIZE];
+    char filepath[2 * BUF_MAXSIZE];
+    info myinfo;
+    FILE *fp;
 
-    //打开相应的文件
-    sprintf(tmp_send_file, "./usrsuploadfiles/%s", filename);
-    fp_sendfile = fopen(tmp_send_file, "r");
-    if (NULL == fp_sendfile)
+    memcpy(&myinfo, recvinfo, sizeof(myinfo));
+    strcpy(filename, myinfo.text);
+    snprintf(filepath, BUF_MAXSIZE * 2, "../FileServer/usrsuploadfiles/%s", filename);
+    fp = fopen(filepath, "r");
+
+    downfileinfo sendinfo;
+    memset(&sendinfo, 0, sizeof(sendinfo));
+    sendinfo.opt = U_DOWN_FILE;
+    if (fp == NULL)
     {
-        //若文件不存在，则发送'n'，并直接返回
-        isexist = 'n';
-        ret = send(recvfd, &isexist, sizeof(isexist), 0);
-        {
-            if (-1 == ret)
-            {
-                ERRLOG("send");
-            }
-        }
+        printf("文件不存在.\n");
+        sendinfo._fill[0] = 'f';
     }
     else
     {
-        //若文件存在，则发送's'，并开始传送文件
-        isexist = 'y';
-        ret = send(recvfd, &isexist, sizeof(isexist), 0);
-        {
-            if (-1 == ret)
-            {
-                ERRLOG("send");
-            }
-        }
-
-        //获取发送文件的文件大小（字节数）
-        fseek(fp_sendfile, 0, SEEK_END);
-        filesize = ftell(fp_sendfile);
-        fseek(fp_sendfile, 0, SEEK_SET);
-
-        //告知客户端要发送文件的大小
-        ret = send(recvfd, &filesize, sizeof(filesize), 0);
-        if (-1 == ret)
-        {
-            ERRLOG("send");
-        }
-
-        // printf("filesize is %d\n", filesize);
-        //开始发送文件
-        while (1)
-        {
-            char sendfile_buf[1024] = {0};
-            //文件读取完毕，跳出循环
-            if (0 == filesize)
-            {
-                printf("文件传输结束\n");
-                break;
-            }
-            //记录读入的字节数用作send函数发送时参数
-            tmp = fread(sendfile_buf, 1, sizeof(sendfile_buf), fp_sendfile);
-            //发送读入的内容并记录发送的字节数
-            tmp = send(recvfd, sendfile_buf, tmp, 0);
-            if (-1 == tmp)
-            {
-                ERRLOG("send");
-            }
-            //更新剩余字节数
-            filesize -= tmp;
-            // printf("tmp is %d\n", tmp);
-            // printf("filesize is %d\n", filesize);
-        }
-
-        //向客户端发送文件发送成功的消息
-        sendresult = 's';
-        ret = send(recvfd, &sendresult, sizeof(sendresult), 0);
-        if (-1 == ret)
-        {
-            ERRLOG("send");
-        }
-        fclose(fp_sendfile);
+        fseek(fp, 0 ,SEEK_END);
+        sendinfo.filesize = ftell(fp);
+        sendinfo._fill[0] = 's';
+        fclose(fp);
     }
-    /**
-     * @brief
-     * 此处注意，返回前，应将此文件描述符从忙文件描述符数组中移除
-     * 不然可能出现服务器崩溃的情况，当返回后，此文件描述符没
-     * 从忙文件描述符数组中移除时，此文件描述符对应的客户端有新的
-     * 请求到来时，将得不到处理，会出现死循环的情况，直至
-     * 崩溃
-     *
-     */
-    server.workingfds[recvfd] = 0;
 
-    return;
+    send(recvfd, &sendinfo, sizeof(sendinfo), 0);
 }
 
 void UpdateName(const int recvfd, const void *recvinfo)

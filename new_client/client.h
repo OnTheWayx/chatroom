@@ -1,5 +1,6 @@
 #ifndef _CLIENT_H_
 #define _CLIENT_H_
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -7,8 +8,11 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #include "userinfo.h"
 #include "clientoptions.h"
@@ -28,7 +32,7 @@
 #define BUF_MAXSIZE 128
 
 //存放客户端基本参数结构体
-struct client_t
+typedef struct client_t
 {
     //创建的套接字（处理逻辑业务）
     int sockfd;
@@ -49,11 +53,16 @@ struct client_t
     //存储聊天信息的文件流指针
     FILE *ChatFp;
 
+    // 服务端ip，端口
+    const char *server_ip;
+    unsigned short server_port;
+    unsigned short server_file_port;
+
     // 客户端状态，置0表示正常运转，置1时停止运行退出程序
     unsigned int client_shutdown;
     //客户端自身信息
     struct usrinfo myinfo;
-};
+}client_t;
 
 /**
  * @brief
@@ -70,7 +79,7 @@ void StartAnimation();
  * 无参数
  * @return int 连接成功返回0，失败返回-1
  */
-int ConnectServer();
+int ConnectServer(const char *ip, unsigned short port, unsigned short file_port);
 
 /**
  * @brief
@@ -265,19 +274,25 @@ void ViewChattingRecords();
 void UploadFiles();
 
 /**
- * @brief
- * DownloadFiles函数
- * 下载文件
- * 用户信息结构体不内容
- * DownloadFIles函数先向服务器请求下载文件，服务器返回可供下
- * 载文件的文件名，然后输入要下载文件的文件名，发送给服务器，
- * 等待服务器确认文件是否存在，若存在，则开始接收文件
- * 接收完文件后，等待服务器确认，若收到服务器发送的's'，则下载成功
- * 若文件不存在，则直接返回
- *
- * 无参数无返回值
+ * 向服务器请求显示当前可供下载的文件
+ */ 
+void ViewDownloadFiles();
+
+/**
+ * 打印出接收到的可供下载的文件的文件名
+ * recvinfo : 接收到的数据
+ */ 
+void DisplayViewFileName(info *recvinfo);
+
+/**
+ * 向服务器请求下载文件并获取文件是否存在结果
  */
-void DownloadFiles();
+void SendDownloadFileName();
+
+/**
+ * 接收请求下载文件是否存在的结果
+ */
+void RecvFileIsExist(info *recvinfo);
 
 /**
  * @brief

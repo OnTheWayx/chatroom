@@ -3,6 +3,8 @@
         "server.h": "c",
         "signal.h": "c",
         "errno.h": "c",
-        "typeinfo": "c"
+        "typeinfo": "c",
+        "fileserver.h": "c",
+        "string.h": "c"
     }
 }
