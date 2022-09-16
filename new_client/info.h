@@ -27,8 +27,11 @@ typedef struct downfileinfo
     // 文件大小
     long filesize;
 
+    // 文件名
+    char filename[60];
+
     // 填补至176字节
-    unsigned char _fill[CLIENT_INFO_SIZE - sizeof(long) - sizeof(enum option) - 4];
+    unsigned char _fill[CLIENT_INFO_SIZE - sizeof(long) - sizeof(char) * 60 - sizeof(enum option) - 4];
 }downfileinfo;
 
 #endif  // end of info.h

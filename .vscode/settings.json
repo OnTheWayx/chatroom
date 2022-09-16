@@ -5,6 +5,8 @@
         "errno.h": "c",
         "typeinfo": "c",
         "fileserver.h": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "client.h": "c",
+        "info.h": "c"
     }
 }

@@ -76,6 +76,6 @@ void ClientService(fileserver_t *fileserver, int fd);
 /**
  * 向客户端发送目标文件
  */
-void SendFile(info *recvinfo);
+void SendFile(file_normalinfo *recvinfo, int fd);
 
 #endif // end of fileserver.h

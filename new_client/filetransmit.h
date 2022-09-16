@@ -23,6 +23,8 @@
 #define SUCCESS 0
 #define FAILURE -1
 
+typedef struct client_t client_t;
+
 void DownloadFile(client_t *client, const char *filename, long filesize);
 
 /**

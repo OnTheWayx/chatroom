@@ -18,6 +18,7 @@
 #include "clientoptions.h"
 #include "clientposition.h"
 #include "info.h"
+#include "filetransmit.h"
 
 //打印出错误信息与发生位置
 #define ERRLOG(errmsg)                                          \

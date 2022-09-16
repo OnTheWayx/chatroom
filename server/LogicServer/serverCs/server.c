@@ -986,13 +986,13 @@ void SendFileIsExist(const int recvfd, const void *recvinfo)
     sendinfo.opt = U_DOWN_FILE;
     if (fp == NULL)
     {
-        printf("文件不存在.\n");
         sendinfo._fill[0] = 'f';
     }
     else
     {
         fseek(fp, 0 ,SEEK_END);
         sendinfo.filesize = ftell(fp);
+        strcpy(sendinfo.filename, filename);
         sendinfo._fill[0] = 's';
         fclose(fp);
     }

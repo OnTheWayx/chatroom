@@ -1,3 +1,6 @@
+/**
+ * 有待完善，后续更新....
+ */ 
 #include "filetransmit.h"
 
 void DownloadFile(client_t *client, const char *filename, long filesize)
@@ -32,31 +35,59 @@ void DownloadFile(client_t *client, const char *filename, long filesize)
     }
 
     // 向服务端确认开始接收文件
-    uploadfile_info sendinfo_recv;
+    downloadfile_info sendinfo_recv;
     
     sendinfo_recv.cmd = FILE_DOWNLOAD;
     strcpy(sendinfo_recv.filename, filename);
+    printf("与服务器建立连接...\n");
     if (Connect(client) != SUCCESS)
     {
         return;
     }
     send(client->sockfd_file, &sendinfo_recv, sizeof(sendinfo_recv), 0);
 
+    printf("开始接收文件...\n");
     fileinfo myinfo;
     // 开始接受文件
     int realrecv = 0;
-    while (recvsize >= filesize)
+    while (recvsize != filesize)
     {
-        realrecv = recv(client->sockfd_file, &myinfo, sizeof(myinfo), 0);
-        recvsize += realrecv;
+        realrecv = recv(client->sockfd_file, &myinfo, sizeof(myinfo), MSG_DONTWAIT);
+        if (realrecv < 0)
+        {
+            // 判断是否发生了错误
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            {
+                // 未发生错误
+                // 睡眠0.1秒并直接返回
+                // printf("recv\n"); // test
+                usleep(100000);
+                continue;
+            }
+            else
+            {
+                // 发生了错误
+                fprintf(stderr, "recv error:%d\n", client->sockfd_file);
+            }
+        }
+        else if (realrecv == 0)
+        {
+            printf("连接中断...\n");
+            exit(-1);
+        }
+        // 更新累计数据长度
+        recvsize += myinfo.filedatalength;
         memcpy(fileptr + FILEBLOCK_MAXSIZE * myinfo.fileorder + FILE_BUF_SIZE * myinfo.file_inblocknumber, 
         myinfo.filebuffer, myinfo.filedatalength);
+        printf("recving.\n");
     }
 
+    printf("文件接收完毕...\n");
+    printf("请到%s/mydownloadfiles目录查看.\n", client->myinfo.id);
     // 文件接收完毕
     close(filefd);
     // 关闭连接
-
+    
     // 取消映射
     munmap(fileptr, filesize);
 }
@@ -87,6 +118,17 @@ int Connect(client_t *client)
     if (ret == -1)
     {
         fprintf(stderr, "连接服务器失败\n");
+        return FAILURE;
+    }
+
+    // 设置套接字为非阻塞状态
+    int flags;
+    flags = fcntl(client->sockfd_file, F_GETFL);
+    flags |= O_NONBLOCK;
+    ret = fcntl(client->sockfd_file, F_SETFL, flags);
+    if (ret == -1)
+    {
+        printf("设置非阻塞模式失败.\n");
         return FAILURE;
     }
 

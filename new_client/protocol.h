@@ -24,7 +24,7 @@ typedef struct file_normalinfo
 }file_normalinfo;
 
 // 固定1024字节
-typedef struct uploadfile_info
+typedef struct downloadfile_info
 {
     // 命令
     int cmd;
@@ -34,7 +34,7 @@ typedef struct uploadfile_info
 
     // 填充到结构体为1024字节
     unsigned char _fille[INFOSIZE - sizeof(int) - sizeof(char) * FILENAMESIZE];
-}uploadfile_info;
+}downloadfile_info;
 
 typedef struct fileinfo
 {

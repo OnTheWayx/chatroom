@@ -133,7 +133,7 @@ void ClientService(fileserver_t *fileserver, int fd)
 {
     int ret;
 
-    info myinfo;
+    file_normalinfo myinfo;
 
     while (!fileserver->shutdown)
     {
@@ -168,7 +168,7 @@ void ClientService(fileserver_t *fileserver, int fd)
             switch (myinfo.cmd)
             {
             case FILE_DOWNLOAD:
-                SendFile(&myinfo);
+                SendFile(&myinfo, fd);
                 break;
 
             default:
@@ -181,19 +181,19 @@ void ClientService(fileserver_t *fileserver, int fd)
     exit(0);
 }
 
-void SendFile(info *recvinfo)
+void SendFile(file_normalinfo *recvinfo, int fd)
 {
     // 获取相应文件名
-    uploadfile_info *myinfo = (uploadfile_info *)recvinfo;
+    downloadfile_info *myinfo = (downloadfile_info *)recvinfo;
     // 文件总大小
     long filesize, sendsize;
     // 文件块数     文件描述符      文件块内编号
     int filetotalnumber, filefd, file_inblocknumber = 0;
-    char filepath[BUF_SIZE], buf[2 * BUF_SIZE];
+    char filepath[BUF_SIZE], buf[3 * BUF_SIZE];
     void *fileptr;
 
     snprintf(filepath, BUF_SIZE, "./usrsuploadfiles/%s", myinfo->filename);
-    filefd = open(filepath, O_RDONLY);
+    filefd = open(filepath, O_RDWR);
     if (filefd == -1)
     {
         fprintf(stderr, "file open failed.\n");
@@ -206,10 +206,11 @@ void SendFile(info *recvinfo)
 
     // 根据文件大小创建相应数量的进程
     filetotalnumber = filesize / FILEBLOCK_MAXSIZE;
+    printf("%d\n", filetotalnumber);
 
     if (filetotalnumber == 0)
     {   // 文件不需要分块，直接发就行了
-        filefd = open(filepath, O_RDONLY);
+        filefd = open(filepath, O_RDWR);
         if (filefd == -1)
         {
             fprintf(stderr, "file open failed.\n");
@@ -241,7 +242,7 @@ void SendFile(info *recvinfo)
             sendinfo.filedatalength = FILE_BUF_SIZE;
             sendinfo.file_inblocknumber = file_inblocknumber++;
             // 向客户端发送数据
-            send(filefd, &sendinfo, sizeof(sendinfo), 0);
+            send(fd, &sendinfo, sizeof(sendinfo), 0);
             // 更新剩余大小
             sendsize -= FILE_BUF_SIZE;
         }
@@ -249,15 +250,146 @@ void SendFile(info *recvinfo)
         sendinfo.filedatalength = sendsize;
         sendinfo.file_inblocknumber = file_inblocknumber++;
         memcpy(sendinfo.filebuffer, fileptr + filesize - sendsize, sendsize);
-        send(filefd, &sendinfo, sizeof(sendinfo), 0);
+        send(fd, &sendinfo, sizeof(sendinfo), 0);
 
         // 文件发送完毕
+        // close(fd);
         close(filefd);
         munmap(fileptr, filesize);
     }
     else
     {
+        // 后续更新...
+
+        // 传输大文件，需要分块
         // 利用split命令将文件分块
-        snprintf(buf, 2 * BUF_SIZE, "split -b %dM %s -d -a 2 %s", FILEBLOCK_MAXSIZE_MB, filepath, myinfo->filename);
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, 3 * BUF_SIZE, "split -b %dm %s -d -a 2 %s", FILEBLOCK_MAXSIZE_MB, filepath, filepath);
+        system(buf);
+        // 开始创建多进程传输数据块
+        int i, pid;
+        for (i = 0; i < filetotalnumber; i++)
+        {
+            if ((pid = fork()) == -1)
+            {
+                fprintf(stderr, "fork failed.\n");
+            }
+            else if (pid == 0)
+            {
+                break;
+            }
+        }
+        if (i == filetotalnumber)
+        {// 父进程
+            snprintf(filepath, BUF_SIZE, "./usrsuploadfiles/%s0%d", myinfo->filename, i);
+            printf("%s\n",filepath); // test
+            filefd = open(filepath, O_RDWR);
+            if (filefd == -1)
+            {
+                fprintf(stderr, "file open failed.\n");
+                // 错误处理...
+            }
+
+            // 填充数据包
+            struct fileinfo sendinfo;
+            sendinfo.cmd = FILE_DOWNLOAD;
+            sendinfo.filesize = filesize;
+            sendinfo.filetotalnumber = filetotalnumber;
+            sendinfo.fileorder = i;
+            sendinfo.filerealsize = filesize % FILEBLOCK_MAXSIZE;
+
+            // 映射文件到内存上
+            fileptr = mmap(NULL, sendinfo.filerealsize, PROT_READ | PROT_WRITE, MAP_SHARED, filefd, 0);
+            if (fileptr == (void *)-1)
+            {
+                fprintf(stderr, "mmap file failed.\n");
+                // 错误处理...
+            }
+
+            // 开始发送
+            sendsize = sendinfo.filerealsize;
+            file_inblocknumber = 0;
+            while (sendsize >= FILE_BUF_SIZE)
+            {
+                memcpy(sendinfo.filebuffer, fileptr + sendinfo.filerealsize - sendsize, FILE_BUF_SIZE);
+                sendinfo.filedatalength = FILE_BUF_SIZE;
+                sendinfo.file_inblocknumber = file_inblocknumber++;
+                // 向客户端发送数据
+                send(fd, &sendinfo, sizeof(sendinfo), 0);
+                // 更新剩余大小
+                sendsize -= FILE_BUF_SIZE;
+                printf("sending.\n");
+            }
+            // 发送最后一个数据包
+            sendinfo.filedatalength = sendsize;
+            sendinfo.file_inblocknumber = file_inblocknumber++;
+            memcpy(sendinfo.filebuffer, fileptr + sendinfo.filerealsize - sendsize, sendsize);
+            send(fd, &sendinfo, sizeof(sendinfo), 0);
+            printf("%s数据发送完毕...\n", filepath);
+
+            // 文件发送完毕
+            close(filefd);
+            munmap(fileptr, filesize);
+
+            printf("数据发送完毕...\n");
+            int i;
+            for (i = 0; i < filetotalnumber; i++)
+            {
+                wait(NULL);
+            }
+            printf("子进程资源回收完毕...\n");
+        }
+        else
+        {// 子进程
+            snprintf(filepath, BUF_SIZE, "./usrsuploadfiles/%s0%d", myinfo->filename, i);
+            printf("%s\n",filepath); // test
+            filefd = open(filepath, O_RDWR);
+            if (filefd == -1)
+            {
+                fprintf(stderr, "file open failed.\n");
+                // 错误处理...
+            }
+
+            // 填充数据包
+            struct fileinfo sendinfo;
+            sendinfo.cmd = FILE_DOWNLOAD;
+            sendinfo.filesize = filesize;
+            sendinfo.filetotalnumber = filetotalnumber;
+            sendinfo.fileorder = i;
+            sendinfo.filerealsize = FILEBLOCK_MAXSIZE;
+
+            // 映射文件到内存上
+            fileptr = mmap(NULL, sendinfo.filerealsize, PROT_READ | PROT_WRITE, MAP_SHARED, filefd, 0);
+            if (fileptr == (void *)-1)
+            {
+                fprintf(stderr, "mmap file failed.\n");
+                // 错误处理...
+            }
+
+            // 开始发送
+            sendsize = sendinfo.filerealsize;
+            file_inblocknumber = 0;
+            while (sendsize >= FILE_BUF_SIZE)
+            {
+                memcpy(sendinfo.filebuffer, fileptr + sendinfo.filerealsize - sendsize, FILE_BUF_SIZE);
+                sendinfo.filedatalength = FILE_BUF_SIZE;
+                sendinfo.file_inblocknumber = file_inblocknumber++;
+                // 向客户端发送数据
+                send(fd, &sendinfo, sizeof(sendinfo), 0);
+                // 更新剩余大小
+                sendsize -= FILE_BUF_SIZE;
+                printf("sending.\n");
+            }
+            // 发送最后一个数据包
+            sendinfo.filedatalength = sendsize;
+            sendinfo.file_inblocknumber = file_inblocknumber++;
+            memcpy(sendinfo.filebuffer, fileptr + sendinfo.filerealsize - sendsize, sendsize);
+            send(fd, &sendinfo, sizeof(sendinfo), 0);
+            printf("%s数据发送完毕...\n", filepath);
+
+            // 文件发送完毕
+            close(filefd);
+            munmap(fileptr, filesize);
+        }
     }
 }

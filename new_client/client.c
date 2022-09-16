@@ -1214,16 +1214,30 @@ void SendDownloadFileName()
 
 void RecvFileIsExist(info *recvinfo)
 {
+    sleep(1);
     downfileinfo *info = (downfileinfo *)recvinfo;
+    pid_t pid;
 
     if (info->_fill[0] == 'f')
     {
         printf("文件不存在，下载失败.\n");
     }
-    else
+    else if (info->_fill[0] == 's')
     {
         printf("后台开始下载文件...\n");
         // 开始下载文件
+        // 创建子进程接收文件
+        pid = fork();
+        if (pid == -1)
+        {
+            ERRLOG("filedownload fork.");
+            return;
+        }
+        else if (pid == 0)
+        {
+            // 子进程开始接收文件
+            DownloadFile(&client, info->filename, info->filesize);
+        }
     }
 }
 

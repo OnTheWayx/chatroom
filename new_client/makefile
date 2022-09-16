@@ -1,11 +1,11 @@
 TARGET:=client
-SOURCE:=client.c client.h start_client.c
+SOURCE:=client.c start_client.c filetransmit.c
 CC:=gcc
 CCFLAGS:=-o
 LINK:=-lpthread
 
 $(TARGET):$(SOURCE)
-	$(CC) $(SOURCE) $(LINK) $(CCFLAGS) $(TARGET)
+	$(CC) $(SOURCE) $(CCFLAGS) $(TARGET) $(LINK)
 
 .PHONY:clean
 clean:
