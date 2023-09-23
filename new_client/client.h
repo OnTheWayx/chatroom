@@ -13,6 +13,7 @@
 #include <semaphore.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <netdb.h>
 
 #include "userinfo.h"
 #include "clientoptions.h"
@@ -20,7 +21,7 @@
 #include "info.h"
 #include "filetransmit.h"
 
-//打印出错误信息与发生位置
+// 打印出错误信息与发生位置
 #define ERRLOG(errmsg)                                          \
     do                                                          \
     {                                                           \
@@ -29,41 +30,41 @@
     } while (0)
 #define FAILURE -1
 #define SUCCESS 0
-//接收缓冲区
+// 接收缓冲区
 #define BUF_MAXSIZE 128
 
-//存放客户端基本参数结构体
+// 存放客户端基本参数结构体
 typedef struct client_t
 {
-    //创建的套接字（处理逻辑业务）
+    // 创建的套接字（处理逻辑业务）
     int sockfd;
     // 创建的套接字（用于文件传输）
     int sockfd_file;
 
-    //聊天权限标志位
+    // 聊天权限标志位
     int disabledchat;
     // 当前用户所在位置（主页，聊天大厅）
     int position;
 
-    //聊天大厅内容打印光标位置记录
+    // 聊天大厅内容打印光标位置记录
     int cur;
 
     // 处理逻辑业务线程号
     pthread_t logic_recv;
 
-    //存储聊天信息的文件流指针
+    // 存储聊天信息的文件流指针
     FILE *ChatFp;
 
     // 服务端ip，端口
-    const char *server_ip;
+    char server_ip[64];
     unsigned short server_port;
     unsigned short server_file_port;
 
     // 客户端状态，置0表示正常运转，置1时停止运行退出程序
     unsigned int client_shutdown;
-    //客户端自身信息
+    // 客户端自身信息
     struct usrinfo myinfo;
-}client_t;
+} client_t;
 
 /**
  * @brief
@@ -74,13 +75,18 @@ typedef struct client_t
 void StartAnimation();
 
 /**
+ * 根据域名获取ip地址
+ */
+int GetIpByDomainName(const char *domainname, char *ip, size_t ip_size);
+
+/**
  * @brief
  * 连接服务器
  *
  * 无参数
  * @return int 连接成功返回0，失败返回-1
  */
-int ConnectServer(const char *ip, unsigned short port, unsigned short file_port);
+int ConnectServer(const char *domainname, unsigned short port, unsigned short file_port);
 
 /**
  * @brief
@@ -135,7 +141,7 @@ int Register();
 /**
  * 线程处理函数
  * 监听线程，专门用来接收逻辑业务相关的消息数据并进行处理
- * 
+ *
  * 参数为NULL
  */
 void *logic_recv_handler(void *arg);
@@ -276,13 +282,13 @@ void UploadFiles();
 
 /**
  * 向服务器请求显示当前可供下载的文件
- */ 
+ */
 void ViewDownloadFiles();
 
 /**
  * 打印出接收到的可供下载的文件的文件名
  * recvinfo : 接收到的数据
- */ 
+ */
 void DisplayViewFileName(info *recvinfo);
 
 /**

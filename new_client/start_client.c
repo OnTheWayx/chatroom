@@ -2,24 +2,25 @@
 
 int main(int argc, char const *argv[])
 {
-    //用于临时保存所调用函数返回值来判断是否发生了错误
+    // 用于临时保存所调用函数返回值来判断是否发生了错误
     int ret;
 
-    //开始运行时动画
+    // 开始运行时动画
     StartAnimation();
-    //连接至服务器
-    ret = ConnectServer("127.0.0.1", 8888, 9999);
+    // 连接至服务器
+
+    ret = ConnectServer("server.natappfree.cc", 33057, 45999);
     if (SUCCESS != ret)
     {
         printf("连接服务器失败...\n");
 
         return FAILURE;
     }
-    
-    //进行登陆或注册操作
+
+    // 进行登陆或注册操作
     int choice = 0;
 
-//如果登录失败或者注册成功，则返回此处登录
+// 如果登录失败或者注册成功，则返回此处登录
 LOGIN:
     system("clear");
     LoReMenu();
@@ -36,7 +37,7 @@ LOGIN:
     }
     if (1 == choice)
     {
-        //登录后载入自身信息
+        // 登录后载入自身信息
         ret = Login();
         if (FAILURE == ret)
         {
@@ -47,7 +48,7 @@ LOGIN:
     }
     else if (2 == choice)
     {
-        //注册账号
+        // 注册账号
         ret = Register();
         if (FAILURE == ret)
         {
@@ -68,12 +69,12 @@ LOGIN:
                 sleep(1);
             }
         }
-        //注册后返回i主页面进行登录
+        // 注册后返回i主页面进行登录
         goto LOGIN;
     }
     else if (3 == choice)
     {
-        //找回密码
+        // 找回密码
         RetrievePasswd();
         goto LOGIN;
     }
@@ -87,40 +88,40 @@ LOGIN:
         switch (choice)
         {
         case 1:
-            //进入聊天室
+            // 进入聊天室
             ChatHall();
             break;
         case 2:
-            //查看在线用户
+            // 查看在线用户
             ViewOnlineusers();
             break;
         case 3:
-            //查看本地保存的聊天记录
+            // 查看本地保存的聊天记录
             ViewChattingRecords();
             break;
         case 4:
-            //向服务器上传文件
-            // UploadFiles();
+            // 向服务器上传文件
+            //  UploadFiles();
             break;
         case 5:
-            //从服务器下载文件
+            // 从服务器下载文件
             ViewDownloadFiles();
             SendDownloadFileName();
             break;
         case 6:
-            //修改昵称
+            // 修改昵称
             UpdateName();
             break;
         case 7:
-            //修改密码
+            // 修改密码
             UpdatePasswd();
             break;
         case 8:
-            //管理员操作
+            // 管理员操作
             admin();
             break;
         case 9:
-            //退出程序
+            // 退出程序
             Exit();
             break;
         default:

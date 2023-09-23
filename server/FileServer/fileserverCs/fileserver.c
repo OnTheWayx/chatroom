@@ -6,7 +6,8 @@ int InitFileServer(fileserver_t *fileserver, const char *ip, unsigned short port
 
     // 获取套接字描述符
     ret = GetSocketfd();
-    if (ret == FAILURE) return FAILURE;
+    if (ret == FAILURE)
+        return FAILURE;
     fileserver->sockfd = ret;
     fileserver->ip = ip;
     fileserver->port = port;
@@ -41,7 +42,7 @@ int StartReadyFileServer(fileserver_t *fileserver)
     ret = bind(fileserver->sockfd, (struct sockaddr *)&serveraddr, serveraddr_len);
     if (ret == -1)
     {
-        fprintf(stderr, "bind sockfd and sockaddr failed.\n");
+        fprintf(stderr, "bind sockfd and sockaddr failed. errno number : %d\n", errno);
         return FAILURE;
     }
 
@@ -55,8 +56,8 @@ int StartReadyFileServer(fileserver_t *fileserver)
     }
 
     // 设置套接字为非阻塞
-    flag = fcntl(fileserver->sockfd, F_GETFL); 
-    flag |= O_NONBLOCK; 
+    flag = fcntl(fileserver->sockfd, F_GETFL);
+    flag |= O_NONBLOCK;
     ret = fcntl(fileserver->sockfd, F_SETFL, flag);
     if (ret == -1)
     {
@@ -82,8 +83,7 @@ void Start(fileserver_t *fileserver)
         newfd = accept(fileserver->sockfd, (struct sockaddr *)&clientaddr, &clientaddr_len);
         if (newfd < 0)
         {
-            if (errno == EWOULDBLOCK  || errno == ECONNABORTED
-            || errno == EWOULDBLOCK || errno == EINTR)
+            if (errno == EWOULDBLOCK || errno == ECONNABORTED || errno == EWOULDBLOCK || errno == EINTR)
             {
                 // 定时回收子进程，若无则立即返回
                 waitpid(-1, NULL, WNOHANG);
@@ -106,12 +106,12 @@ void Start(fileserver_t *fileserver)
             fprintf(stderr, "fork error");
         }
         else if (pid > 0)
-        {   // 父进程
+        { // 父进程
             // 继续回到循环开始监听
             continue;
         }
         else
-        {   // 子进程
+        { // 子进程
             ClientService(fileserver, newfd);
         }
     }
@@ -209,7 +209,7 @@ void SendFile(file_normalinfo *recvinfo, int fd)
     printf("%d\n", filetotalnumber);
 
     if (filetotalnumber == 0)
-    {   // 文件不需要分块，直接发就行了
+    { // 文件不需要分块，直接发就行了
         filefd = open(filepath, O_RDWR);
         if (filefd == -1)
         {
@@ -280,9 +280,9 @@ void SendFile(file_normalinfo *recvinfo, int fd)
             }
         }
         if (i == filetotalnumber)
-        {// 父进程
+        { // 父进程
             snprintf(filepath, BUF_SIZE, "./usrsuploadfiles/%s0%d", myinfo->filename, i);
-            printf("%s\n",filepath); // test
+            printf("%s\n", filepath); // test
             filefd = open(filepath, O_RDWR);
             if (filefd == -1)
             {
@@ -340,9 +340,9 @@ void SendFile(file_normalinfo *recvinfo, int fd)
             printf("子进程资源回收完毕...\n");
         }
         else
-        {// 子进程
+        { // 子进程
             snprintf(filepath, BUF_SIZE, "./usrsuploadfiles/%s0%d", myinfo->filename, i);
-            printf("%s\n",filepath); // test
+            printf("%s\n", filepath); // test
             filefd = open(filepath, O_RDWR);
             if (filefd == -1)
             {

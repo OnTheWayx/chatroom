@@ -4,7 +4,8 @@ int main(void)
 {
     fileserver_t fileserver;
 
-    if (InitFileServer(&fileserver, "127.0.0.1", 9999) != 0)
+    // 47.96.75.101
+    if (InitFileServer(&fileserver, "192.168.0.103", 10926) != 0)
     {
         return -1;
     }

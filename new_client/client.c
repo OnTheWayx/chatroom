@@ -20,7 +20,7 @@ void StartAnimation()
     fflush(stdout);
     for (i = 0; i < 6; i++)
     {
-        //睡眠0.1 * 6秒
+        // 睡眠0.1 * 6秒
         usleep(100000);
         printf(".");
         fflush(stdout);
@@ -28,9 +28,34 @@ void StartAnimation()
     printf("\n");
 }
 
-int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
+int GetIpByDomainName(const char *domainname, char *ip, size_t ip_size)
+{
+    struct hostent *host = gethostbyname(domainname);
+
+    if (host->h_addrtype != AF_INET)
+    {
+        perror("The net is not AF_INET.");
+        return FAILURE;
+    }
+    if (ip_size < strlen(inet_ntoa(*((struct in_addr *)host->h_addr_list[0]))) + 1)
+    {
+        perror("ip_size is too small.");
+        return FAILURE;
+    }
+    strncpy(ip, inet_ntoa(*((struct in_addr *)host->h_addr_list[0])), strlen(inet_ntoa(*((struct in_addr *)host->h_addr_list[0]))) + 1);
+
+    return SUCCESS;
+}
+
+int ConnectServer(const char *domainname, unsigned short port, unsigned short file_port)
 {
     // 初始化客户端基本参数
+    char serverip[64] = {0};
+
+    if (SUCCESS != GetIpByDomainName(domainname, serverip, sizeof(serverip)))
+    {
+        printf("Get Server ip failed.\n");
+    }
     client.client_shutdown = 0;
     client.disabledchat = 0;
     client.sockfd = 0;
@@ -38,11 +63,11 @@ int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
     memset(&(client.myinfo), 0, sizeof(client.myinfo));
     client.cur = 12;
     client.ChatFp = NULL;
-    client.server_ip = ip;
+    strncpy(client.server_ip, serverip, sizeof(client.server_ip));
     client.server_port = port;
     client.server_file_port = file_port;
 
-    //用于临时保存所调用函数的返回值判断是否发生了错误
+    // 用于临时保存所调用函数的返回值判断是否发生了错误
     int ret;
 
     /**
@@ -50,7 +75,7 @@ int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
      */
     client.sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
-    //填充网络信息结构体，保存服务器信息
+    // 填充网络信息结构体，保存服务器信息
     struct sockaddr_in server_addr;
     socklen_t server_len = sizeof(server_addr);
 
@@ -59,8 +84,7 @@ int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
     server_addr.sin_addr.s_addr = inet_addr(client.server_ip);
     server_addr.sin_port = htons(client.server_port);
 
-
-    //连接至服务器
+    // 连接至服务器
     ret = connect(client.sockfd, (struct sockaddr *)&server_addr, server_len);
     if (-1 == ret)
     {
@@ -69,7 +93,7 @@ int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
         return FAILURE;
     }
     printf("连接服务器成功...\n");
-    
+
     // 设置套接字为非阻塞
     int flags = fcntl(client.sockfd, F_GETFL);
     flags |= O_NONBLOCK;
@@ -86,7 +110,7 @@ int ConnectServer(const char *ip, unsigned short port, unsigned short file_port)
 
 void LoReMenu()
 {
-    //设置窗口大小为32行100列
+    // 设置窗口大小为32行100列
     system("resize -s 32 100");
     system("clear");
     printf("\033[3B\t\t\t\t --------------------------\n");
@@ -107,10 +131,10 @@ int Login()
 
     struct info buf;
 
-    //登录操作
+    // 登录操作
     buf.opt = U_LOGIN;
     printf("账号：");
-    //若输入的账号格式不正确，会提示重新输入，直到格式正确为止
+    // 若输入的账号格式不正确，会提示重新输入，直到格式正确为止
     while (1)
     {
         memset(tmp, 0, sizeof(tmp));
@@ -124,7 +148,7 @@ int Login()
     }
     strncpy(buf.usr.id, tmp, 6);
     printf("密码：");
-    //当输入的密码格式不正确时，会提示重新输入，直到格式正确为止
+    // 当输入的密码格式不正确时，会提示重新输入，直到格式正确为止
     while (1)
     {
         memset(tmp, 0, sizeof(tmp));
@@ -146,9 +170,9 @@ int Login()
 
         return FAILURE;
     }
-    //清空缓冲区buf，用于接收消息
+    // 清空缓冲区buf，用于接收消息
     memset(&buf, 0, sizeof(buf));
-    //接收服务器发送的结果
+    // 接收服务器发送的结果
     while (1)
     {
         ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
@@ -182,7 +206,7 @@ int Login()
         return FAILURE;
     }
     // buf.text[0] = 's'则说明登录成功
-    //读入账号在服务器端的账号与昵称
+    // 读入账号在服务器端的账号与昵称
     else if (U_LOGIN == buf.opt && 's' == buf.text[0])
     {
         strncpy(client.myinfo.id, buf.usr.id, 6);
@@ -208,32 +232,32 @@ int Login()
 int Register()
 {
     int ret, i, confirm;
-    //判定账号格式是否正确标志
+    // 判定账号格式是否正确标志
     int flag = 1;
 
     char tmp[128] = {0};
     struct info buf;
 
-    //进行注册操作
+    // 进行注册操作
     buf.opt = U_REGISTER;
     printf("\033[33m***请输入账号，6位数字***\n");
     printf("\033[37m账号：");
-    //若输入的账号格式不正确，会提示重新输入，直到格式正确为止
+    // 若输入的账号格式不正确，会提示重新输入，直到格式正确为止
     while (1)
     {
-        //判定账号格式是否正确标志置1
+        // 判定账号格式是否正确标志置1
         flag = 1;
         memset(tmp, 0, sizeof(tmp));
         scanf("%s", tmp);
         for (i = 0; i < 6; i++)
         {
-            //若输入的字符不在'0'和'9'之间，则格式错误，flag置0
+            // 若输入的字符不在'0'和'9'之间，则格式错误，flag置0
             if (tmp[i] < '0' || tmp[i] > '9')
             {
                 flag = 0;
             }
         }
-        //若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
+        // 若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
         if ((6 == strlen(tmp)) && (1 == flag))
         {
             break;
@@ -244,7 +268,7 @@ int Register()
     strncpy(buf.usr.id, tmp, 6);
     printf("\033[33m***请输入密码，6-13个任意字符***\n");
     printf("\033[37m密码：");
-    //当输入的密码格式不正确时，会提示重新输入，直到格式正确为止
+    // 当输入的密码格式不正确时，会提示重新输入，直到格式正确为止
     while (1)
     {
         memset(tmp, 0, sizeof(tmp));
@@ -259,7 +283,7 @@ int Register()
         printf("密码：");
     }
     strncpy(buf.usr.passwd, tmp, 13);
-    //昵称最长为15个字节
+    // 昵称最长为15个字节
     printf("\033[33m***请输入昵称，最长15个字符***\n");
     printf("\033[37m昵称：");
     while (1)
@@ -276,7 +300,7 @@ int Register()
         printf("昵称：");
     }
     strncpy(buf.usr.name, tmp, 15);
-    //密保，用于找回密码时使用
+    // 密保，用于找回密码时使用
     printf("\033[33m***请输入密保，用于找回密码***\n");
     printf("\033[33m***您父亲的名字？***\n");
     printf("\033[37m请输入密保：");
@@ -295,25 +319,25 @@ int Register()
         scanf("%d", &confirm);
         if (2 == confirm)
         {
-            //取消注册账号，直接返回
+            // 取消注册账号，直接返回
             printf("已取消注册\n");
 
             return FAILURE;
         }
         else if (1 == confirm)
         {
-            //确定修改昵称，跳出循环，执行下面的操作
+            // 确定修改昵称，跳出循环，执行下面的操作
             break;
         }
         else
         {
-            //输入有误，重新输入
+            // 输入有误，重新输入
             printf("输入有误，请重新输入\n");
             getchar();
         }
     }
-    //用户信息结构体为要注册的账号、密码、昵称信息，消息正文为密保
-    //发送
+    // 用户信息结构体为要注册的账号、密码、昵称信息，消息正文为密保
+    // 发送
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
@@ -321,7 +345,7 @@ int Register()
 
         return FAILURE;
     }
-    //接收服务器发送的结果
+    // 接收服务器发送的结果
     while (1)
     {
         ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
@@ -340,15 +364,15 @@ int Register()
             break;
         }
     }
-    
-    //注册失败，账号已存在
+
+    // 注册失败，账号已存在
     if (U_REGISTER == buf.opt && 'f' == buf.text[0])
     {
         printf("账号已存在\n");
 
         return FAILURE;
     }
-    //注册成功
+    // 注册成功
     else if (U_REGISTER == buf.opt && 's' == buf.text[0])
     {
         return SUCCESS;
@@ -441,7 +465,7 @@ void *logic_recv_handler(void *arg)
 
 void Menu()
 {
-    //设置窗口大小为32行100列
+    // 设置窗口大小为32行100列
     system("resize -s 32 100");
     system("clear");
     printf("\033[3B\t\t\t\t --------------------------\n");
@@ -462,13 +486,13 @@ void Menu()
 
 void RecvFromChatHall(struct info *recvinfo)
 {
-    //获取当前时间
+    // 获取当前时间
     char *str_t;
-    
-    //将接收到的信息打印在聊天大厅当前的位置
-    // option=3，默认消息，所有人可见
+
+    // 将接收到的信息打印在聊天大厅当前的位置
+    //  option=3，默认消息，所有人可见
     printf("\033[37m\033[%d;0H%s %s:%s\n", client.cur, recvinfo->usr.id, recvinfo->usr.name, recvinfo->text);
-    //保存聊天记录
+    // 保存聊天记录
     str_t = GetTime();
     fprintf(client.ChatFp, "%s%s %s:%s\n", str_t, recvinfo->usr.id, recvinfo->usr.name, recvinfo->text);
     free(str_t);
@@ -477,11 +501,11 @@ void RecvFromChatHall(struct info *recvinfo)
 
 void RecvFromChatHallPrivate(struct info *recvinfo)
 {
-    //获取当前时间
+    // 获取当前时间
     char *str_t;
 
     printf("\033[33m\033[%d;0H%s %s（私聊）:%s\n", client.cur, recvinfo->usr.id, recvinfo->usr.name, recvinfo->text);
-    //保存聊天记录
+    // 保存聊天记录
     str_t = GetTime();
     fprintf(client.ChatFp, "%s%s %s（私聊）:%s\n", str_t, recvinfo->usr.id, recvinfo->usr.name, recvinfo->text);
     free(str_t);
@@ -500,10 +524,10 @@ void RecvViewOnlineUsers(struct info *recvinfo)
     system("clear");
     printf("\n\n\n\n\t\t\t\t           在线用户         \n");
     printf("\n\n\t\t\t\t    账号            昵称         \n");
-    //记录当前指向的消息正文的下标
+    // 记录当前指向的消息正文的下标
     int index = 0;
 
-    //依次打印出在线用户信息
+    // 依次打印出在线用户信息
     while (strlen(recvinfo->text + index) != 0)
     {
         char id[7] = {0};
@@ -532,17 +556,17 @@ void RecvUpdatePasswdResult(struct info *recvinfo)
 {
     if ('f' == recvinfo->text[0])
     {
-        //修改密码失败
+        // 修改密码失败
         printf("原密码错误，修改密码失败\n");
     }
     else if ('e' == recvinfo->text[0])
     {
-        //修改密码失败
+        // 修改密码失败
         printf("输入的新密码与原密码相同，修改密码失败\n");
     }
     else if ('s' == recvinfo->text[0])
     {
-        //修改密码成功
+        // 修改密码成功
         printf("修改密码成功\n");
     }
 }
@@ -599,16 +623,15 @@ void RecvHeartBeat()
     }
 }
 
-
 void ChatHall()
 {
     int ret;
 
-    //客户端接收发送消息的缓冲区
+    // 客户端接收发送消息的缓冲区
     struct info buf;
 
     char tmp[BUF_MAXSIZE] = {0};
-    //获取当前时间
+    // 获取当前时间
     char *str_t = NULL;
 
     // 用户当前位置更改为聊天大厅
@@ -616,7 +639,7 @@ void ChatHall()
     system("clear");
     printf("\n\n\n\n\t\t\t\t           聊天大厅         \n");
     sleep(1);
-    //打开记录聊天记录的文件，开始写入，每个用户有单独的目录
+    // 打开记录聊天记录的文件，开始写入，每个用户有单独的目录
     sprintf(tmp, "mkdir %s", client.myinfo.id);
     system(tmp);
     sprintf(tmp, "mkdir %s/mychatrecords", client.myinfo.id);
@@ -627,15 +650,15 @@ void ChatHall()
     {
         ERRLOG("fopen");
     }
-    //获取当前时间
+    // 获取当前时间
     str_t = GetTime();
     fprintf(client.ChatFp, "%s进入聊天大厅\n", str_t);
-    //释放空间
+    // 释放空间
     free(str_t);
     str_t = NULL;
     system("clear");
 
-    //用户向服务器发送要进入聊天大厅的信息
+    // 用户向服务器发送要进入聊天大厅的信息
     buf.opt = U_CHATHALL;
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
@@ -643,13 +666,13 @@ void ChatHall()
         ERRLOG("send");
     }
 
-    //发送消息
+    // 发送消息
     while (1)
     {
         printf("\033[37m\033[32;60H1.退出 2.私聊 3.常用话语 4.表情");
         printf("\033[37m\033[32;0H");
         scanf("%s", buf.text);
-        //清除在终端显示的刚刚发送的内容
+        // 清除在终端显示的刚刚发送的内容
         printf("\033[37m\033[31;0H");
         printf("\033[K");
         fflush(stdout);
@@ -657,13 +680,13 @@ void ChatHall()
         {
             client.cur--;
         }
-        //输入'1‘ --- 直接退出聊天室
+        // 输入'1‘ --- 直接退出聊天室
         if (1 == strlen(buf.text) && '1' == buf.text[0])
         {
             QuitChat();
             break;
         }
-        //若被禁言，仅打印出被禁言消息
+        // 若被禁言，仅打印出被禁言消息
         if (0 != client.disabledchat)
         {
             printf("\033[29;60H\033[K");
@@ -673,45 +696,45 @@ void ChatHall()
         else
         {
 
-            //若选择了聊天室内2-4号子功能，则进行相应操作
+            // 若选择了聊天室内2-4号子功能，则进行相应操作
             if ((1 == strlen(buf.text)) && (buf.text[0] >= '2' && buf.text[0] <= '4'))
             {
-                //私聊其他用户（仅目标用户可见）
+                // 私聊其他用户（仅目标用户可见）
                 if ('2' == buf.text[0])
                 {
                     PrivateChat();
                 }
-                //快捷发送常用话语
+                // 快捷发送常用话语
                 else if ('3' == buf.text[0])
                 {
                     SendComm();
                 }
-                //快捷发送表情
+                // 快捷发送表情
                 else if ('4' == buf.text[0])
                 {
                     SendEmoji();
                 }
             }
-            //正常将消息发送到聊天大厅，所有人可见
+            // 正常将消息发送到聊天大厅，所有人可见
             else
             {
                 buf.opt = U_CHATHALL;
                 strncpy(buf.usr.id, client.myinfo.id, 6);
                 strncpy(buf.usr.name, client.myinfo.name, 15);
-                //将发送消息发送到服务器
+                // 将发送消息发送到服务器
                 ret = send(client.sockfd, &buf, sizeof(buf), 0);
                 if (-1 == ret)
                 {
                     ERRLOG("send");
                 }
-                //若输入消息为'1'，则退出聊天大厅
-                //将自己发送的信息打印在聊天大厅当前的位置
+                // 若输入消息为'1'，则退出聊天大厅
+                // 将自己发送的信息打印在聊天大厅当前的位置
                 printf("\033[32m\033[%d;0H%s（我）:%s\n", client.cur, client.myinfo.name, buf.text);
-                //获取当前时间
+                // 获取当前时间
                 str_t = GetTime();
-                //保存聊天记录
+                // 保存聊天记录
                 fprintf(client.ChatFp, "%s%s（我）：%s\n", str_t, client.myinfo.name, buf.text);
-                //释放空间
+                // 释放空间
                 free(str_t);
                 str_t = NULL;
                 if (client.cur <= 31)
@@ -729,24 +752,24 @@ void QuitChat()
 {
     int ret;
 
-    //客户端接收发送消息的缓冲区
+    // 客户端接收发送消息的缓冲区
     struct info buf;
 
-    //获取当前时间
+    // 获取当前时间
     char *str_t = NULL;
 
     str_t = GetTime();
     fprintf(client.ChatFp, "%s退出聊天大厅\n", str_t);
-    //释放空间
+    // 释放空间
     free(str_t);
     str_t = NULL;
-    //关闭记录聊天记录文件流
+    // 关闭记录聊天记录文件流
     fclose(client.ChatFp);
     client.ChatFp = NULL;
-    //重置聊天大厅内容打印光标位置记录
+    // 重置聊天大厅内容打印光标位置记录
     client.cur = 12;
-    //将要退出聊天大厅的消息告知服务器
-    // option=4，用户信息结构体无内容，消息正文无内容
+    // 将要退出聊天大厅的消息告知服务器
+    //  option=4，用户信息结构体无内容，消息正文无内容
     memset(&buf, 0, sizeof(buf));
     buf.opt = U_QUITCHAT;
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
@@ -762,35 +785,35 @@ void PrivateChat()
 {
     int ret;
 
-    //客户端接收发送消息的缓冲区
+    // 客户端接收发送消息的缓冲区
     struct info buf;
 
-    //获取当前时间
+    // 获取当前时间
     char *str_t = NULL;
 
     // option=5，代表这是私聊操作
     memset(&buf, 0, sizeof(buf));
     buf.opt = U_PRIVATE_CHAT;
-    //将要打印的信息通过printf函数打印在特定位置
+    // 将要打印的信息通过printf函数打印在特定位置
     printf("\033[33m\033[31;60H请输入私聊信息（格式：用户ID-消息） ");
     printf("\033[37m\033[32;60H1.退出 2.私聊 3.常用话语 4.表情");
     printf("\033[37m\033[32;0H");
     scanf("%s", buf.text);
-    //清除在终端显示的刚刚发送的内容
+    // 清除在终端显示的刚刚发送的内容
     printf("\033[37m\033[31;0H");
     printf("\033[K");
     fflush(stdout);
-    //发送消息
+    // 发送消息
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
         ERRLOG("send");
     }
-    //清除提示消息
+    // 清除提示消息
     printf("\033[30;60H\033[K");
-    //将自己发送的信息打印在聊天大厅当前的位置
+    // 将自己发送的信息打印在聊天大厅当前的位置
     printf("\033[33m\033[%d;0H%s（我）私聊 %s\n", client.cur, client.myinfo.name, buf.text);
-    //保存聊天记录
+    // 保存聊天记录
     str_t = GetTime();
     fprintf(client.ChatFp, "%s%s（我）私聊 %s\n", str_t, client.myinfo.name, buf.text);
     free(str_t);
@@ -806,24 +829,24 @@ void SendComm()
     int choice, ret;
 
     char *comm = NULL;
-    //发送消息缓冲区
+    // 发送消息缓冲区
     struct info buf;
 
-    //将要打印的信息通过printf函数打印在特定位置
+    // 将要打印的信息通过printf函数打印在特定位置
     printf("\033[33m\033[31;60H请选择您要发送的话语");
     printf("\033[37m\033[32;60H1.退出 2.私聊 3.常用话语 4.表情");
     while (1)
     {
-        //选择快捷常用话语前，打印常用话语表
+        // 选择快捷常用话语前，打印常用话语表
         CommonWords(0);
         printf("\033[37m\033[32;0H");
         // choice=1-8
         scanf("%d", &choice);
-        //清除在终端显示的刚刚输入的内容
+        // 清除在终端显示的刚刚输入的内容
         printf("\033[37m\033[31;0H");
         printf("\033[K");
         fflush(stdout);
-        //接收选择常用话语所在的内存空间
+        // 接收选择常用话语所在的内存空间
         comm = CommonWords(choice);
         if (NULL != comm)
         {
@@ -839,7 +862,7 @@ void SendComm()
     strncpy(buf.usr.id, client.myinfo.id, 6);
     strncpy(buf.usr.name, client.myinfo.name, 15);
     strncpy(buf.text, comm, BUF_MAXSIZE);
-    //释放存放常用话语的空间
+    // 释放存放常用话语的空间
     free(comm);
     comm = NULL;
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
@@ -847,7 +870,7 @@ void SendComm()
     {
         ERRLOG("send");
     }
-    //将自己发送的信息打印在聊天大厅当前的位置
+    // 将自己发送的信息打印在聊天大厅当前的位置
     printf("\033[32m\033[%d;0H%s（我）:%s\n", client.cur, client.myinfo.name, buf.text);
     if (client.cur <= 31)
     {
@@ -880,13 +903,13 @@ char *CommonWords(const int choice)
     int i;
     int index = 23;
 
-    //清除上次在终端打印的常用话语表
+    // 清除上次在终端打印的常用话语表
     for (i = 0; i < 9; i++)
     {
         printf("\033[%d;60H\033[K", index - 1);
         index++;
     }
-    //参数不在常用话语表下标内时，打印常用话语表，返回值为空
+    // 参数不在常用话语表下标内时，打印常用话语表，返回值为空
     if (choice - 1 < 0 || choice - 1 > 7)
     {
         index = 23;
@@ -898,7 +921,7 @@ char *CommonWords(const int choice)
 
         return NULL;
     }
-    //当参数为常用话语表下标时,返回值为相应的常用话语
+    // 当参数为常用话语表下标时,返回值为相应的常用话语
     char *tmp = (char *)malloc(sizeof(char) * BUF_MAXSIZE);
 
     strncpy(tmp, words[choice - 1], BUF_MAXSIZE);
@@ -911,24 +934,24 @@ void SendEmoji()
     int choice, ret;
 
     char *comm = NULL;
-    //发送消息缓冲区
+    // 发送消息缓冲区
     struct info buf;
 
-    //将要打印的信息通过printf函数打印在特定位置
+    // 将要打印的信息通过printf函数打印在特定位置
     printf("\033[33m\033[31;60H请选择您要发送的表情");
     printf("\033[37m\033[32;60H1.退出 2.私聊 3.常用话语 4.表情");
     while (1)
     {
-        //选择快捷表情前，打印表情表
+        // 选择快捷表情前，打印表情表
         Emojis(0);
         printf("\033[37m\033[32;0H");
         // choice=1-8
         scanf("%d", &choice);
-        //清除在终端显示的刚刚输入的内容
+        // 清除在终端显示的刚刚输入的内容
         printf("\033[37m\033[31;0H");
         printf("\033[K");
         fflush(stdout);
-        //接收选择表情所在的内存空间
+        // 接收选择表情所在的内存空间
         comm = Emojis(choice);
         if (NULL != comm)
         {
@@ -944,7 +967,7 @@ void SendEmoji()
     strncpy(buf.usr.id, client.myinfo.id, 6);
     strncpy(buf.usr.name, client.myinfo.name, 15);
     strncpy(buf.text, comm, BUF_MAXSIZE);
-    //释放存放表情的空间
+    // 释放存放表情的空间
     free(comm);
     comm = NULL;
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
@@ -952,7 +975,7 @@ void SendEmoji()
     {
         ERRLOG("send");
     }
-    //将自己发送的信息打印在聊天大厅当前的位置
+    // 将自己发送的信息打印在聊天大厅当前的位置
     printf("\033[32m\033[%d;0H%s（我）:%s\n", client.cur, client.myinfo.name, buf.text);
     if (client.cur <= 31)
     {
@@ -985,13 +1008,13 @@ char *Emojis(const int choice)
     int i;
     int index = 23;
 
-    //清除上次在终端打印的表情表
+    // 清除上次在终端打印的表情表
     for (i = 0; i < 9; i++)
     {
         printf("\033[%d;60H\033[K", index - 1);
         index++;
     }
-    //参数不在表情表下标内时，打印表情表，返回值为空
+    // 参数不在表情表下标内时，打印表情表，返回值为空
     if (choice - 1 < 0 || choice - 1 > 7)
     {
         index = 23;
@@ -1003,7 +1026,7 @@ char *Emojis(const int choice)
 
         return NULL;
     }
-    //当参数为表情表下标时,返回值为相应的表情
+    // 当参数为表情表下标时,返回值为相应的表情
     char *tmp = (char *)malloc(sizeof(char) * BUF_MAXSIZE);
 
     strncpy(tmp, emojis[choice - 1], BUF_MAXSIZE);
@@ -1014,12 +1037,12 @@ char *Emojis(const int choice)
 void ViewOnlineusers()
 {
     int ret;
-    //发送接收消息缓冲区
+    // 发送接收消息缓冲区
     struct info buf;
 
     memset(&buf, 0, sizeof(buf));
     // option=6代表客户端要查询在线用户的信息
-    //消息正文无内容
+    // 消息正文无内容
     buf.opt = U_VIEW_ONLINE;
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
@@ -1027,7 +1050,7 @@ void ViewOnlineusers()
         ERRLOG("send");
     }
 
-    //按下回车键时返回主页
+    // 按下回车键时返回主页
     printf("\033[31;85H按回车键返回\n");
     while (1)
     {
@@ -1044,16 +1067,16 @@ void ViewChattingRecords()
     char tmp[BUF_MAXSIZE] = {0};
 
     system("clear");
-    //定位聊天记录文件所在路径
+    // 定位聊天记录文件所在路径
     sprintf(tmp, "./%s/mychatrecords/%s-records.txt", client.myinfo.id, client.myinfo.id);
     client.ChatFp = fopen(tmp, "r");
     if (NULL == client.ChatFp)
     {
         return;
     }
-    //清空tmp内容
+    // 清空tmp内容
     memset(tmp, 0, sizeof(tmp));
-    //读聊天记录，读一行，打印一行%*c把'\n'吞掉
+    // 读聊天记录，读一行，打印一行%*c把'\n'吞掉
     while (EOF != fscanf(client.ChatFp, "%[^\n]%*c", tmp))
     {
         printf("%s\n", tmp);
@@ -1061,7 +1084,7 @@ void ViewChattingRecords()
     }
     fclose(client.ChatFp);
     client.ChatFp = NULL;
-    //按下回车键时返回主页
+    // 按下回车键时返回主页
     printf("\033[31;85H按回车键返回\n");
     while (1)
     {
@@ -1195,7 +1218,7 @@ void ViewDownloadFiles()
 }
 
 void DisplayViewFileName(info *recvinfo)
-{   
+{
     printf("%s\n", recvinfo->text);
 }
 
@@ -1244,24 +1267,24 @@ void RecvFileIsExist(info *recvinfo)
 void UpdateName()
 {
     int ret;
-    //修改昵称时确定项
+    // 修改昵称时确定项
     int confirm;
 
-    //接收呢称是否修改成功的结果
+    // 接收呢称是否修改成功的结果
     char update_result;
-    //新的昵称
+    // 新的昵称
     char newname[16] = {0};
 
-    //向服务器发送的消息
+    // 向服务器发送的消息
     struct info buf;
 
-    //输入新的昵称
+    // 输入新的昵称
     system("clear");
     printf("\033[33m***修改昵称***\n");
     printf("\033[37m现昵称为：%s\n\n", client.myinfo.name);
     while (1)
     {
-        //当输入的昵称格式正确时才跳出循环
+        // 当输入的昵称格式正确时才跳出循环
         printf("请输入新的昵称：");
         scanf("%s", newname);
         if (strlen(newname) <= 15)
@@ -1271,7 +1294,7 @@ void UpdateName()
         printf("昵称最长为15个字符\n");
     }
 
-    //若与原有昵称一样，则直接返回
+    // 若与原有昵称一样，则直接返回
     if (0 == strcmp(client.myinfo.name, newname))
     {
         printf("与现昵称相同\n");
@@ -1281,7 +1304,7 @@ void UpdateName()
         return;
     }
 
-    //是否确定修改昵称
+    // 是否确定修改昵称
     printf("\n新的昵称为：%s\n", newname);
     printf("确定修改昵称为：%s？\n\n", newname);
     printf("确定：1       取消：2\n");
@@ -1292,7 +1315,7 @@ void UpdateName()
         scanf("%d", &confirm);
         if (2 == confirm)
         {
-            //取消修改昵称，直接返回
+            // 取消修改昵称，直接返回
             printf("两秒后返回主页面\n");
             sleep(2);
 
@@ -1300,26 +1323,26 @@ void UpdateName()
         }
         else if (1 == confirm)
         {
-            //确定修改昵称，跳出循环，执行下面的操作
+            // 确定修改昵称，跳出循环，执行下面的操作
             break;
         }
         else
         {
-            //输入有误，重新输入
+            // 输入有误，重新输入
             printf("输入有误，请重新输入\n");
             getchar();
         }
     }
 
-    //向服务器发送修改昵称的请求
+    // 向服务器发送修改昵称的请求
     memset(&buf, 0, sizeof(buf));
     buf.opt = U_UPDATE_NAME;
-    //要修改昵称的用户的账号ID
+    // 要修改昵称的用户的账号ID
     strncpy(buf.usr.id, client.myinfo.id, 6);
-    //要修改昵称的用户的新昵称
+    // 要修改昵称的用户的新昵称
     strncpy(buf.usr.name, newname, 15);
 
-    //将消息打包好发送给服务器
+    // 将消息打包好发送给服务器
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
@@ -1347,7 +1370,7 @@ void RetrievePasswd()
      */
     int ret, i, flag;
 
-    //用于临时存放输入的账号
+    // 用于临时存放输入的账号
     char tmp[128] = {0};
 
     struct info buf;
@@ -1358,18 +1381,18 @@ void RetrievePasswd()
     printf("\033[37m请输入账号：");
     while (1)
     {
-        //判定账号格式是否正确标志置1
+        // 判定账号格式是否正确标志置1
         flag = 1;
         scanf("%s", tmp);
         for (i = 0; i < 6; i++)
         {
-            //若输入的字符不在'0'和'9'之间，则格式错误，flag置0
+            // 若输入的字符不在'0'和'9'之间，则格式错误，flag置0
             if (tmp[i] < '0' || tmp[i] > '9')
             {
                 flag = 0;
             }
         }
-        //若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
+        // 若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
         if ((6 == strlen(tmp)) && (1 == flag))
         {
             break;
@@ -1378,23 +1401,23 @@ void RetrievePasswd()
         printf("账号为6位数字，请重新输入！\n");
         printf("账号：");
     }
-    //输入密保的回答
+    // 输入密保的回答
     printf("您父亲的名字是？\n");
     printf("请输入：");
     scanf("%s", buf.text);
     buf.opt = U_RETRIEVE_PASSWD;
     strncpy(buf.usr.id, tmp, 6);
 
-    //向服务器发送打包好的消息
-    //用户信息结构体为账号ID，其他项无内容，消息正文为密保问题的回答
+    // 向服务器发送打包好的消息
+    // 用户信息结构体为账号ID，其他项无内容，消息正文为密保问题的回答
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
         ERRLOG("send");
     }
 
-    //接收服务器的回应
-    //接收服务器发送的结果
+    // 接收服务器的回应
+    // 接收服务器发送的结果
     while (1)
     {
         ret = recv(client.sockfd, &buf, sizeof(buf), MSG_DONTWAIT);
@@ -1413,7 +1436,7 @@ void RetrievePasswd()
             break;
         }
     }
-    //若收到了'f'，则说明密保问题回答错误，否则说明找回密码成功并打印
+    // 若收到了'f'，则说明密保问题回答错误，否则说明找回密码成功并打印
     if ((U_RETRIEVE_PASSWD == buf.opt) && (1 == strlen(buf.text)) && 'f' == buf.text[0])
     {
         printf("密保错误，找回密码失败\n");
@@ -1441,25 +1464,25 @@ void UpdatePasswd()
 {
     int ret, confirm;
 
-    //用于接收服务器的结果
+    // 用于接收服务器的结果
     char update_result;
-    //临时存放输入的数据
+    // 临时存放输入的数据
     char tmp[128] = {0};
 
-    //发送接收消息缓冲区
+    // 发送接收消息缓冲区
     struct info buf;
 
     memset(&buf, 0, sizeof(buf));
     system("clear");
     printf("\033[33m***修改密码***\n");
-    //输入原密码
+    // 输入原密码
     while (1)
     {
         printf("\033[37m请输入原密码：");
         memset(tmp, 0, sizeof(tmp));
         scanf("%s", tmp);
 
-        //直到输入密码格式正确时跳出循环
+        // 直到输入密码格式正确时跳出循环
         int length = strlen(tmp);
         if (length >= 6 && length <= 13)
         {
@@ -1467,17 +1490,17 @@ void UpdatePasswd()
         }
         printf("密码为6-13个字符，请重新输入\n");
     }
-    //将原密码放到用户信息结构体的密码项
+    // 将原密码放到用户信息结构体的密码项
     strncpy(buf.usr.passwd, tmp, 13);
 
-    //输入新的密码
+    // 输入新的密码
     while (1)
     {
         printf("\033[37m请输入新的密码：");
         memset(tmp, 0, sizeof(tmp));
         scanf("%s", tmp);
 
-        //直到输入密码格式正确时跳出循环
+        // 直到输入密码格式正确时跳出循环
         int length = strlen(tmp);
         if (length >= 6 && length <= 13)
         {
@@ -1485,10 +1508,10 @@ void UpdatePasswd()
         }
         printf("密码为6-13个字符，请重新输入\n");
     }
-    //将新的密码放到消息正文
+    // 将新的密码放到消息正文
     strncpy(buf.text, tmp, 13);
 
-    //是否确定修改密码
+    // 是否确定修改密码
     printf("\n新密码为：%s\n", buf.text);
     printf("确定修改？\n\n");
     printf("确定：1       取消：2\n");
@@ -1499,7 +1522,7 @@ void UpdatePasswd()
         scanf("%d", &confirm);
         if (2 == confirm)
         {
-            //取消修改密码，直接返回
+            // 取消修改密码，直接返回
             printf("两秒后返回主页面\n");
             sleep(2);
 
@@ -1507,22 +1530,22 @@ void UpdatePasswd()
         }
         else if (1 == confirm)
         {
-            //确定修改密码，跳出循环，执行下面的操作
+            // 确定修改密码，跳出循环，执行下面的操作
             break;
         }
         else
         {
-            //输入有误，重新输入
+            // 输入有误，重新输入
             printf("输入有误，请重新输入\n");
             getchar();
         }
     }
 
-    //标志修改密码操作
+    // 标志修改密码操作
     buf.opt = U_UPDATE_PASSWD;
     strncpy(buf.usr.id, client.myinfo.id, 6);
 
-    //向服务器发送打包好的消息
+    // 向服务器发送打包好的消息
     ret = send(client.sockfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
@@ -1550,9 +1573,9 @@ void admin()
      */
     int choice, i, flag;
 
-    //临时存放输入的数据
+    // 临时存放输入的数据
     char tmp[128] = {0};
-    //存放要禁言或踢出的账号id
+    // 存放要禁言或踢出的账号id
     char managed_id[7] = {0};
 
     system("clear");
@@ -1565,7 +1588,7 @@ void admin()
     }
     printf("\033[33m\n\n***禁言踢人***\n");
     printf("\033[37m\n1.禁言\t\t2.解除禁言\t\t3.踢人\n");
-    //保证选择无误
+    // 保证选择无误
     while (1)
     {
         printf("请选择：");
@@ -1580,22 +1603,22 @@ void admin()
 
     if (1 == choice)
     {
-        //进行禁言操作
+        // 进行禁言操作
         printf("\n\033[33m请输入要禁言的账号ID\033[37m\n");
         while (1)
         {
-            //判定账号格式是否正确标志置1
+            // 判定账号格式是否正确标志置1
             flag = 1;
             scanf("%s", tmp);
             for (i = 0; i < 6; i++)
             {
-                //若输入的字符不在'0'和'9'之间，则格式错误，flag置0
+                // 若输入的字符不在'0'和'9'之间，则格式错误，flag置0
                 if (tmp[i] < '0' || tmp[i] > '9')
                 {
                     flag = 0;
                 }
             }
-            //若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
+            // 若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
             if ((6 == strlen(tmp)) && (1 == flag))
             {
                 break;
@@ -1604,29 +1627,29 @@ void admin()
             printf("账号：");
             memset(tmp, 0, sizeof(tmp));
         }
-        //将要禁言的账号ID放到managed_id里面
+        // 将要禁言的账号ID放到managed_id里面
         strncpy(managed_id, tmp, 6);
         BanningSpeaking(managed_id);
         sleep(1);
     }
     else if (2 == choice)
     {
-        //进行禁言操作
+        // 进行禁言操作
         printf("\n\033[33m请输入要解除禁言的账号ID\033[37m\n");
         while (1)
         {
-            //判定账号格式是否正确标志置1
+            // 判定账号格式是否正确标志置1
             flag = 1;
             scanf("%s", tmp);
             for (i = 0; i < 6; i++)
             {
-                //若输入的字符不在'0'和'9'之间，则格式错误，flag置0
+                // 若输入的字符不在'0'和'9'之间，则格式错误，flag置0
                 if (tmp[i] < '0' || tmp[i] > '9')
                 {
                     flag = 0;
                 }
             }
-            //若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
+            // 若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
             if ((6 == strlen(tmp)) && (1 == flag))
             {
                 break;
@@ -1635,29 +1658,29 @@ void admin()
             printf("账号：");
             memset(tmp, 0, sizeof(tmp));
         }
-        //将要禁言的账号ID放到managed_id里面
+        // 将要禁言的账号ID放到managed_id里面
         strncpy(managed_id, tmp, 6);
         DisabledBanningSpeaking(managed_id);
         sleep(1);
     }
     else if (3 == choice)
     {
-        //进行踢人操作
+        // 进行踢人操作
         printf("\n\033[33m请输入要踢出聊天室的账号ID\033[37m\n");
         while (1)
         {
-            //判定账号格式是否正确标志置1
+            // 判定账号格式是否正确标志置1
             flag = 1;
             scanf("%s", tmp);
             for (i = 0; i < 6; i++)
             {
-                //若输入的字符不在'0'和'9'之间，则格式错误，flag置0
+                // 若输入的字符不在'0'和'9'之间，则格式错误，flag置0
                 if (tmp[i] < '0' || tmp[i] > '9')
                 {
                     flag = 0;
                 }
             }
-            //若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
+            // 若账号字符都是'0'和'9'之间，且长度为6，则格式正确，跳出循环
             if ((6 == strlen(tmp)) && (1 == flag))
             {
                 break;
@@ -1666,7 +1689,7 @@ void admin()
             printf("账号：");
             memset(tmp, 0, sizeof(tmp));
         }
-        //将要踢出聊天室的账号ID放到managed_id里面
+        // 将要踢出聊天室的账号ID放到managed_id里面
         strncpy(managed_id, tmp, 6);
         ExitChatroom(managed_id);
         sleep(1);
@@ -1763,9 +1786,9 @@ char *GetTime()
 
     time_t clock;
 
-    //获取时间，保存到time_t结构体中。在time的返回值(sec)里面有全部秒数
+    // 获取时间，保存到time_t结构体中。在time的返回值(sec)里面有全部秒数
     time(&clock);
-    strcpy(str_t, ctime(&clock)); //将time_t类型的结构体中的时间，按照一定格式保存成字符串，
+    strcpy(str_t, ctime(&clock)); // 将time_t类型的结构体中的时间，按照一定格式保存成字符串，
 
     return str_t;
 }

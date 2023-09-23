@@ -10,20 +10,20 @@ int InitServerOptions(server_t *server)
     server->epfd = 0;
     server->chat_maxfd = 0;
     server->shutdown = 0;
-    
+
     // 初始化在线用户链表
     server->usrs_online = CreateList();
     pthread_mutex_init(&server->usrs_online_mutex, NULL);
 
-    //初始化创建的线程池
+    // 初始化创建的线程池
     server->pool = NULL;
 
-    //初始化数据库句柄
+    // 初始化数据库句柄
     server->usrsdb = NULL;
-    //数据库操作互斥量
+    // 数据库操作互斥量
     pthread_mutex_init(&server->usrsdb_mutex, NULL);
 
-    //文件指针（用于保存所有人的聊天信息）
+    // 文件指针（用于保存所有人的聊天信息）
     server->ChatFp = NULL;
     // 文件指针操作互斥量
     pthread_mutex_init(&server->ChatFp_mutex, NULL);
@@ -41,13 +41,13 @@ int InitServer()
     // 初始化服务器基本参数
     InitServerOptions(&server);
 
-    //用于临时保存所调用函数的返回值判断是否发生了错误
+    // 用于临时保存所调用函数的返回值判断是否发生了错误
     int ret, i;
 
-    //若用户信息表不存在，则创建用户信息表
+    // 若用户信息表不存在，则创建用户信息表
     char sql[128] = {0};
 
-    //数据库操作前上锁
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
@@ -66,7 +66,7 @@ int InitServer()
     }
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
 
     /**
@@ -80,30 +80,32 @@ int InitServer()
         return FAILURE;
     }
 
-    //设置地址可以被重复绑定
+    // 设置地址可以被重复绑定
     int opt = 1;
     setsockopt(server.sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     // 设置套接字为非阻塞模式
-    
+
     int flags;
-    if ((flags = fcntl(server.sockfd, F_GETFL, NULL)) < 0) {
+    if ((flags = fcntl(server.sockfd, F_GETFL, NULL)) < 0)
+    {
         return -1;
     }
-    if (fcntl(server.sockfd, F_SETFL, flags | O_NONBLOCK) == -1) {
+    if (fcntl(server.sockfd, F_SETFL, flags | O_NONBLOCK) == -1)
+    {
         return -1;
     }
 
-    //填充网络信息结构体，保存服务器信息
+    // 填充网络信息结构体，保存服务器信息
     struct sockaddr_in server_addr;
     socklen_t server_len = sizeof(server_addr);
 
     memset(&server_addr, 0, server_len);
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server_addr.sin_port = htons(8888);
+    server_addr.sin_addr.s_addr = inet_addr("192.168.0.101");
+    server_addr.sin_port = htons(10926);
 
-    //绑定套接字与网络信息结构体
+    // 绑定套接字与网络信息结构体
     ret = bind(server.sockfd, (struct sockaddr *)&server_addr, server_len);
     if (-1 == ret)
     {
@@ -112,7 +114,7 @@ int InitServer()
         return FAILURE;
     }
 
-    //设置监听队列(套接字，最大等待处理的连接队列的长度)
+    // 设置监听队列(套接字，最大等待处理的连接队列的长度)
     ret = listen(server.sockfd, 10);
     if (-1 == ret)
     {
@@ -121,12 +123,12 @@ int InitServer()
         return FAILURE;
     }
 
-    //中间变量
+    // 中间变量
     struct epoll_event ev;
 
-    //创建epoll对象
+    // 创建epoll对象
     server.epfd = epoll_create(CLIENT_MAXSIZE);
-    //创建失败时返回前关闭套接字
+    // 创建失败时返回前关闭套接字
     if (-1 == server.epfd)
     {
         ERRLOG("epoll_create");
@@ -135,11 +137,11 @@ int InitServer()
     }
     memset(&ev, 0, sizeof(ev));
     ev.data.fd = server.sockfd;
-    //当server.sockfd可读的时候
+    // 当server.sockfd可读的时候
     ev.events = EPOLLIN;
-    //将server.sockfd（套接字）添加到server.epfd（创建的epoll对象）中
+    // 将server.sockfd（套接字）添加到server.epfd（创建的epoll对象）中
     ret = epoll_ctl(server.epfd, EPOLL_CTL_ADD, server.sockfd, &ev);
-    //创建失败时返回前关闭套接字和创建的epoll对象
+    // 创建失败时返回前关闭套接字和创建的epoll对象
     if (-1 == ret)
     {
         ERRLOG("epoll_ctl");
@@ -147,8 +149,8 @@ int InitServer()
         return FAILURE;
     }
 
-    //创建线程池
-    //线程数量为10，任务队列最大长度为20
+    // 创建线程池
+    // 线程数量为10，任务队列最大长度为20
     server.pool = threadpool_create(10, 20);
     if (NULL == server.pool)
     {
@@ -156,7 +158,7 @@ int InitServer()
 
         return FAILURE;
     }
-    //处理客户端请求的任务添加到任务队列
+    // 处理客户端请求的任务添加到任务队列
     thread_add_task(server.pool, TransMsg, 0, NULL);
     thread_add_task(server.pool, HeartBeatSend, 0, NULL);
 
@@ -171,21 +173,21 @@ void CloseServer()
 
     int i;
 
-    //把套接字从epoll对象中删除
+    // 把套接字从epoll对象中删除
     memset(&ev, 0, sizeof(ev));
     ev.data.fd = server.sockfd;
     ev.events = EPOLLIN;
     epoll_ctl(server.epfd, EPOLL_CTL_DEL, server.sockfd, &ev);
-    //关闭套接字与epoll对象
+    // 关闭套接字与epoll对象
     close(server.sockfd);
     close(server.epfd);
-    //关闭保存聊天信息的文件指针
+    // 关闭保存聊天信息的文件指针
     fclose(server.ChatFp);
-    //取消一直工作的这两个线程(接收客户端的连接，转发客户端的消息）
+    // 取消一直工作的这两个线程(接收客户端的连接，转发客户端的消息）
     threadpool_destroy(server.pool);
     printf("资源回收完成...\n");
     printf("服务器已关闭...\n");
-    //结束主程序
+    // 结束主程序
     exit(0);
 }
 
@@ -193,7 +195,7 @@ void AcceptClient(const int recvfd, const void *recvinfo)
 {
     struct epoll_event ev;
 
-    //客户端网络信息结构体
+    // 客户端网络信息结构体
     struct sockaddr_in client_addr;
     socklen_t client_len = sizeof(client_addr);
 
@@ -216,18 +218,18 @@ void AcceptClient(const int recvfd, const void *recvinfo)
 
         for (i = 0; i < num; i++)
         {
-            //如果存在发生事件的文件描述符为套接字，则说明有客户端请求连接
+            // 如果存在发生事件的文件描述符为套接字，则说明有客户端请求连接
             if (server.events[i].data.fd == server.sockfd)
             {
                 printf("有客户端请求连接...\n");
 
-                //接收客户端的连接
+                // 接收客户端的连接
                 int fd = accept(server.sockfd, (struct sockaddr *)&client_addr, &client_len);
                 if (-1 == fd)
                 {
                     ERRLOG("accept");
                 }
-                //把接收到的客户端的文件描述符添加到epoll对象中
+                // 把接收到的客户端的文件描述符添加到epoll对象中
                 memset(&ev, 0, sizeof(ev));
                 ev.data.fd = fd;
                 ev.events = EPOLLIN;
@@ -254,8 +256,8 @@ void TransMsg(const int recvfd, const void *recvinfo)
 
     userlinklist *p;
 
-    //打开保存聊天信息的文件，写入所有经服务器转发的信息
-    // system("mkdir chattingrecords");
+    // 打开保存聊天信息的文件，写入所有经服务器转发的信息
+    //  system("mkdir chattingrecords");
     server.ChatFp = fopen("./chattingrecords/records.txt", "a+");
     if (NULL == server.ChatFp)
     {
@@ -289,7 +291,7 @@ void TransMsg(const int recvfd, const void *recvinfo)
 
             if ((server.events[i].data.fd != server.sockfd) && (server.events[i].events & EPOLLIN))
             {
-                //接收消息
+                // 接收消息
                 ret = recv(server.events[i].data.fd, &buf, sizeof(buf), MSG_DONTWAIT);
                 if (-1 == ret)
                 {
@@ -325,31 +327,31 @@ void TransMsg(const int recvfd, const void *recvinfo)
                     switch (buf.opt)
                     {
                     case U_LOGIN:
-                        //登录
+                        // 登录
                         thread_add_task(server.pool, Login, server.events[i].data.fd, &buf);
                         break;
                     case U_REGISTER:
-                        //注册
+                        // 注册
                         thread_add_task(server.pool, Register, server.events[i].data.fd, &buf);
                         break;
                     case U_CHATHALL:
-                        //进入聊天大厅并进行聊天（默认群发）
+                        // 进入聊天大厅并进行聊天（默认群发）
                         thread_add_task(server.pool, ChatHall, server.events[i].data.fd, &buf);
                         break;
                     case U_QUITCHAT:
-                        //退出聊天大厅
+                        // 退出聊天大厅
                         thread_add_task(server.pool, QuitChat, server.events[i].data.fd, NULL);
                         break;
                     case U_PRIVATE_CHAT:
                         thread_add_task(server.pool, PrivateChat, server.events[i].data.fd, &buf);
                         break;
                     case U_VIEW_ONLINE:
-                        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
+                        // 此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                         thread_add_task(server.pool, ViewOnlineusers, server.events[i].data.fd, NULL);
                         break;
                     case U_UPLOAD_FILE:
-                        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
+                        // 此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                         thread_add_task(server.pool, RecieveUploadFiles, server.events[i].data.fd, &buf);
                         break;
@@ -361,7 +363,7 @@ void TransMsg(const int recvfd, const void *recvinfo)
                         // ...
                         break;
                     case U_UPDATE_NAME:
-                        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
+                        // 此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                         thread_add_task(server.pool, UpdateName, server.events[i].data.fd, &buf);
                         break;
@@ -369,7 +371,7 @@ void TransMsg(const int recvfd, const void *recvinfo)
                         thread_add_task(server.pool, RetrievePasswd, server.events[i].data.fd, &buf);
                         break;
                     case U_UPDATE_PASSWD:
-                        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
+                        // 此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
                         server.workingfds[server.events[i].data.fd] = server.events[i].data.fd;
                         thread_add_task(server.pool, UpdatePasswd, server.events[i].data.fd, &buf);
                         break;
@@ -391,7 +393,7 @@ void TransMsg(const int recvfd, const void *recvinfo)
                 }
             }
         }
-        //每轮询完一遍发生的事件数组，睡眠0.05秒
+        // 每轮询完一遍发生的事件数组，睡眠0.05秒
         usleep(50000);
     }
 }
@@ -425,7 +427,7 @@ void HeartBeatSend(const int recvfd, const void *recvinfo)
                 p = p->next;
             }
             else if (p->heartcount == 5)
-            {   // 客户端多次未回应，说明客户端已掉线，将其从在线用户链表中删除
+            { // 客户端多次未回应，说明客户端已掉线，将其从在线用户链表中删除
                 printf("client %d is offline.\n", p->fd);
                 tmp = p->next;
                 // ClearClient内部会加锁
@@ -470,13 +472,13 @@ void ClearClient(const int recvfd, const void *recvinfo)
 
     int ret;
 
-    //清空客户端相关的在线信息
+    // 清空客户端相关的在线信息
     LOCK(server.usrs_online_mutex);
     EraseList(server.usrs_online, recvfd);
     UNLOCK(server.usrs_online_mutex);
 
     server.usrs_chathall[recvfd] = 0;
-    //将客户端的文件描述符从、epoll对象中移除
+    // 将客户端的文件描述符从、epoll对象中移除
     memset(&ev, 0, sizeof(ev));
     ev.data.fd = recvfd;
     ev.events = EPOLLIN;
@@ -492,17 +494,17 @@ void Login(const int recvfd, const void *recvinfo)
 {
     int ret;
 
-    //复制接收到的客户端的数据到buf里来
+    // 复制接收到的客户端的数据到buf里来
     struct info buf;
 
     char sql[128] = {0};
-    //存放查询的结果
+    // 存放查询的结果
     char **result;
 
     int row, column;
 
-    //打开数据库
-    //数据库操作前上锁
+    // 打开数据库
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (ret != SQLITE_OK)
@@ -510,23 +512,23 @@ void Login(const int recvfd, const void *recvinfo)
         ERRLOG("sqlite3_open");
     }
     memcpy(&buf, recvinfo, sizeof(buf));
-    //同时查账号和密码，若查到数据，则说明账号密码正确登录成功
+    // 同时查账号和密码，若查到数据，则说明账号密码正确登录成功
     snprintf(sql, 128, "select id,passwd,name from usr where id='%s' and passwd='%s';", buf.usr.id, buf.usr.passwd);
     ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &column, NULL);
     if (ret != SQLITE_OK)
     {
         ERRLOG("sqlite3_get_table");
     }
-    //关闭数据库句柄并置空
+    // 关闭数据库句柄并置空
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
 
     if (0 == row)
     {
-        //根据客户端输入的账号密码未查询到数据
-        //说明账号不存在或密码错误，返回字符'f'
+        // 根据客户端输入的账号密码未查询到数据
+        // 说明账号不存在或密码错误，返回字符'f'
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_LOGIN;
         buf.text[0] = 'f';
@@ -538,16 +540,16 @@ void Login(const int recvfd, const void *recvinfo)
     }
     else if (1 == row)
     {
-        //根据客户端输入的账号密码查询到数据
-        //判断账号是否已经被登录
+        // 根据客户端输入的账号密码查询到数据
+        // 判断账号是否已经被登录
         int i;
 
         LOCK(server.usrs_online_mutex);
         userlinklist *p = server.usrs_online->next;
         while (p != NULL)
         {
-            //若账号处于在线状态，则说明账号已经登录
-            //返回字符'l'
+            // 若账号处于在线状态，则说明账号已经登录
+            // 返回字符'l'
             if (0 == strncmp(p->user.id, result[3], 6))
             {
                 memset(&buf, 0, sizeof(buf));
@@ -574,7 +576,7 @@ void Login(const int recvfd, const void *recvinfo)
         UNLOCK(server.usrs_online_mutex);
 
         memset(&buf, 0, sizeof(buf));
-        //将登录成功的消息's'以及有关客户端自身信息返回给客户端
+        // 将登录成功的消息's'以及有关客户端自身信息返回给客户端
         buf.opt = U_LOGIN;
         buf.text[0] = 's';
         strncpy(buf.usr.id, result[3], 6);
@@ -585,7 +587,7 @@ void Login(const int recvfd, const void *recvinfo)
             ERRLOG("send");
         }
     }
-    //释放查询的结果
+    // 释放查询的结果
     sqlite3_free_table(result);
 
     return;
@@ -595,37 +597,37 @@ void Register(const int recvfd, const void *recvinfo)
 {
     int ret;
 
-    //复制recvbuf（客户端发送的数据）到buf里来
+    // 复制recvbuf（客户端发送的数据）到buf里来
     struct info buf;
 
-    //要执行的sql语句，查询该账号是否已存在
+    // 要执行的sql语句，查询该账号是否已存在
     char sql[256] = {0};
 
-    //存放查询的结果
+    // 存放查询的结果
     char **result;
     int row, column;
 
-    //打开数据库
-    //数据库操作前上锁
+    // 打开数据库
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
     }
-    //把客户端传来的数据复制到buf中
+    // 把客户端传来的数据复制到buf中
     memcpy(&buf, recvinfo, sizeof(buf));
-    //将数据插入数据库，若插入失败，则说明账号（主键）已存在
+    // 将数据插入数据库，若插入失败，则说明账号（主键）已存在
     snprintf(sql, 256, "insert into usr values('%s','%s','%s','%s');", buf.usr.id, buf.usr.passwd, buf.usr.name, buf.text);
     ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
     {
-        //告知客户端账号已存在，发送一个'f'
+        // 告知客户端账号已存在，发送一个'f'
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_REGISTER;
         buf.text[0] = 'f';
@@ -637,7 +639,7 @@ void Register(const int recvfd, const void *recvinfo)
     }
     else if (SQLITE_OK == ret)
     {
-        //告知客户端账号注册成功，发送一个's'
+        // 告知客户端账号注册成功，发送一个's'
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_REGISTER;
         buf.text[0] = 's';
@@ -655,10 +657,10 @@ void ChatHall(const int recvfd, const void *recvinfo)
 {
     int ret;
 
-    //复制客户端发送的消息
+    // 复制客户端发送的消息
     struct info buf;
 
-    //用于以字符串形式获取当前时间
+    // 用于以字符串形式获取当前时间
     char *str_t = NULL;
 
     userlinklist *p = NULL;
@@ -673,22 +675,22 @@ void ChatHall(const int recvfd, const void *recvinfo)
     {
         server.usrs_chathall[recvfd] = recvfd;
     }
-    //循环次数为记录的聊天大厅内用户的最大文件描述符
+    // 循环次数为记录的聊天大厅内用户的最大文件描述符
     else
     {
-        //以字符串形式获取当前时间
+        // 以字符串形式获取当前时间
         str_t = GetTime();
         fprintf(server.ChatFp, "%s%s %s:%s\n", str_t, buf.usr.id, buf.usr.name, buf.text);
-        //释放空间
+        // 释放空间
         free(str_t);
-        //指针释放指向空间后置空
+        // 指针释放指向空间后置空
         str_t = NULL;
 
         LOCK(server.usrs_online_mutex);
         p = server.usrs_online->next;
         while (p != NULL)
         {
-            //将消息转发给聊天大厅内的用户（除了自己）
+            // 将消息转发给聊天大厅内的用户（除了自己）
             if (0 != server.usrs_chathall[p->fd] && p->fd != recvfd)
             {
                 ret = send(server.usrs_chathall[p->fd], &buf, sizeof(buf), 0);
@@ -707,7 +709,7 @@ void ChatHall(const int recvfd, const void *recvinfo)
 
 void QuitChat(const int recvfd, const void *recvinfo)
 {
-    //将用户从聊天大厅用户表中移除
+    // 将用户从聊天大厅用户表中移除
     server.usrs_chathall[recvfd] = 0;
     // printf("recvfd=%d退出了聊天大厅\n",recvfd);
 
@@ -718,7 +720,7 @@ void PrivateChat(const int recvfd, const void *recvinfo)
 {
     int ret;
 
-    //以字符串形式获取当前系统时间
+    // 以字符串形式获取当前系统时间
     char *str_t;
 
     // 复制接收到的客户端发送的消息
@@ -730,14 +732,14 @@ void PrivateChat(const int recvfd, const void *recvinfo)
     userlinklist *usr, *p;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    //查找目标用户
+    // 查找目标用户
     p = server.usrs_online->next;
     while (p != NULL)
     {
-        //将消息转发给目标用户
+        // 将消息转发给目标用户
         if (0 == strncmp(p->user.id, buf.text, 6))
         {
-            //若目标用户在聊天大厅内，则将消息发送给目标用户
+            // 若目标用户在聊天大厅内，则将消息发送给目标用户
             if (0 != server.usrs_chathall[p->fd])
             {
                 str_t = GetTime();
@@ -774,14 +776,14 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
 {
     int i, ret;
     int index = 0;
-    //复制客户端发送的消息
+    // 复制客户端发送的消息
     struct info buf;
 
     memset(&buf, 0, sizeof(buf));
     // option=6代表发送的是在线用户相关信息
     buf.opt = U_VIEW_ONLINE;
 
-    //循环查询在线用户用户表
+    // 循环查询在线用户用户表
     LOCK(server.usrs_online_mutex);
     userlinklist *p = server.usrs_online->next;
     while (p != NULL)
@@ -794,7 +796,7 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
         p = p->next;
     }
     UNLOCK(server.usrs_online_mutex);
-    //发送结果
+    // 发送结果
     ret = send(recvfd, &buf, sizeof(buf), 0);
     if (-1 == ret)
     {
@@ -806,19 +808,19 @@ void ViewOnlineusers(const int recvfd, const void *recvinfo)
 void RecieveUploadFiles(const int recvfd, const void *recvinfo)
 {
     int ret, tmp;
-    //接收文件的大小
+    // 接收文件的大小
     unsigned int filesize = 0;
 
     char upload_result;
-    //用于创建相应的文件
+    // 用于创建相应的文件
     char create_file[256] = {0};
 
     userlinklist *p;
 
-    //缓冲区
+    // 缓冲区
     struct info buf;
 
-    //创建的新文件的文件指针
+    // 创建的新文件的文件指针
     FILE *recv_fp = NULL;
 
     LOCK(server.usrs_online_mutex);
@@ -829,7 +831,7 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
     sprintf(create_file, "./usrsuploadfiles/%s", buf.text);
     printf("%s\n", create_file);
     // printf("%d\n", __LINE__);
-    //创建文件
+    // 创建文件
     recv_fp = fopen(create_file, "w");
     if (NULL == recv_fp)
     {
@@ -843,13 +845,13 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
          * 崩溃
          *
          */
-        //此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
+        // 此文件描述符即将进行传送文件，需要多次recv，加入忙文件描述符server.workingfds数组
         server.workingfds[recvfd] = 0;
 
         return;
     }
 
-    //接收要接收的文件的大小
+    // 接收要接收的文件的大小
     ret = recv(recvfd, &filesize, sizeof(filesize), 0);
     if (-1 == ret)
     {
@@ -857,18 +859,18 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
     }
     // printf("filesize is %d\n", filesize);
 
-    //开始接收文件
+    // 开始接收文件
     while (1)
     {
         char recvfile_buf[1024] = {0};
 
-        //当剩余文件长度为0时，则传输结束，跳出循环
+        // 当剩余文件长度为0时，则传输结束，跳出循环
         if (0 == filesize)
         {
             printf("文件传输结束\n");
             break;
         }
-        //接收文件并记录接收的字节数
+        // 接收文件并记录接收的字节数
         if (filesize > sizeof(recvfile_buf))
         {
             tmp = recv(recvfd, recvfile_buf, sizeof(recvfile_buf), 0);
@@ -881,13 +883,13 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
         {
             ERRLOG("recv");
         }
-        //写入目标文件
+        // 写入目标文件
         fwrite(recvfile_buf, tmp, 1, recv_fp);
-        //更新文件剩余字节数
+        // 更新文件剩余字节数
         filesize -= tmp;
     }
 
-    //向客户端发送文件接收（上传）成功的消息
+    // 向客户端发送文件接收（上传）成功的消息
     upload_result = 's';
     ret = send(recvfd, &upload_result, sizeof(upload_result), 0);
     if (-1 == ret)
@@ -896,9 +898,9 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
     }
     // printf("发送了%d:%c\n", recvfd, upload_result);
 
-    //关闭打开的文件指针
+    // 关闭打开的文件指针
     fclose(recv_fp);
-    //将此文件描述符从忙文件描述符数组中移除
+    // 将此文件描述符从忙文件描述符数组中移除
     server.workingfds[recvfd] = 0;
 
     return;
@@ -907,12 +909,12 @@ void RecieveUploadFiles(const int recvfd, const void *recvinfo)
 void SendFileName(const int recvfd, const void *recvinfo)
 {
     int ret, tmp;
-    //发送文件剩余字节数
+    // 发送文件剩余字节数
     unsigned int filesize = 0;
 
-    //中间生成文件files.txt的文件指针
+    // 中间生成文件files.txt的文件指针
     FILE *fp_name = NULL;
-    //客户端要下载文件的文件指针
+    // 客户端要下载文件的文件指针
     FILE *fp_sendfile = NULL;
 
     char isexist;
@@ -920,9 +922,9 @@ void SendFileName(const int recvfd, const void *recvinfo)
     char filename[128] = {0};
     char tmp_send_file[256] = {0};
 
-    //查看可下载文件目录下的所有文件，输出重定位到files.txt
+    // 查看可下载文件目录下的所有文件，输出重定位到files.txt
     system("ls ../FileServer/usrsuploadfiles > files.txt");
-    //以只读方式打开files.txt
+    // 以只读方式打开files.txt
     fp_name = fopen("files.txt", "r");
     if (NULL == fp_name)
     {
@@ -945,7 +947,7 @@ void SendFileName(const int recvfd, const void *recvinfo)
     // 重置文件指针位置
     fseek(fp_name, 0, SEEK_SET);
 
-    //将files.txt文件内容分包发送给客户端
+    // 将files.txt文件内容分包发送给客户端
     while (1)
     {
         info myinfo;
@@ -964,7 +966,7 @@ void SendFileName(const int recvfd, const void *recvinfo)
         }
         send(recvfd, &myinfo, sizeof(myinfo), 0);
     }
-    //关闭中间文件files.txt文件指针并删除文件
+    // 关闭中间文件files.txt文件指针并删除文件
     fclose(fp_name);
     system("rm files.txt");
 }
@@ -990,7 +992,7 @@ void SendFileIsExist(const int recvfd, const void *recvinfo)
     }
     else
     {
-        fseek(fp, 0 ,SEEK_END);
+        fseek(fp, 0, SEEK_END);
         sendinfo.filesize = ftell(fp);
         strcpy(sendinfo.filename, filename);
         sendinfo._fill[0] = 's';
@@ -1004,35 +1006,35 @@ void UpdateName(const int recvfd, const void *recvinfo)
 {
     int ret;
 
-    //接收呢称是否修改成功的结果
+    // 接收呢称是否修改成功的结果
     char update_result;
-    //存放执行的sql语句
+    // 存放执行的sql语句
     char sql[128] = {0};
 
-    //发送接收消息的缓冲区
+    // 发送接收消息的缓冲区
     struct info buf;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    //打开数据库句柄
-    //数据库操作前上锁
+    // 打开数据库句柄
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
     }
-    //执行更新昵称的语句
+    // 执行更新昵称的语句
     sprintf(sql, "update usr set name='%s' where id='%s';", buf.usr.name, buf.usr.id);
     ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
-    //关闭数据库句柄
+    // 关闭数据库句柄
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
     {
-        //向客户端发送昵称修改失败的结果
+        // 向客户端发送昵称修改失败的结果
         ERRLOG("sqlite3_exec");
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_UPDATE_NAME;
@@ -1045,7 +1047,7 @@ void UpdateName(const int recvfd, const void *recvinfo)
     }
     else
     {
-        //向客户端发送昵称修改成功的结果
+        // 向客户端发送昵称修改成功的结果
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_UPDATE_NAME;
         buf.text[0] = 's';
@@ -1055,7 +1057,7 @@ void UpdateName(const int recvfd, const void *recvinfo)
             ERRLOG("send");
         }
     }
-    //将此文件描述符从忙文件描述符数组中移除
+    // 将此文件描述符从忙文件描述符数组中移除
     server.workingfds[recvfd] = 0;
 
     return;
@@ -1064,33 +1066,33 @@ void UpdateName(const int recvfd, const void *recvinfo)
 void RetrievePasswd(const int recvfd, const void *recvinfo)
 {
     int ret;
-    //存储数据库查询结果的行数和列数
+    // 存储数据库查询结果的行数和列数
     int row, col;
 
-    //存放数据库查询的结果
+    // 存放数据库查询的结果
     char **result;
-    //存放执行的sql语句
+    // 存放执行的sql语句
     char sql[256] = {0};
 
     struct info buf;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    //打开数据库句柄
-    //数据库操作前上锁
+    // 打开数据库句柄
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
     {
         ERRLOG("sqlite3_open");
     }
-    //将执行的sql语句放入sql数据中
+    // 将执行的sql语句放入sql数据中
     snprintf(sql, 256, "select passwd from usr where id='%s' and propasswd='%s';", buf.usr.id, buf.text);
-    //执行sql语句并获取查询结果
+    // 执行sql语句并获取查询结果
     ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &col, NULL);
-    //关闭数据库句柄
+    // 关闭数据库句柄
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
 
     if (SQLITE_OK != ret)
@@ -1099,7 +1101,7 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
     }
     if (0 == row)
     {
-        //若传出参数row=0，则说明没有查到结果，向客户端发送'f'
+        // 若传出参数row=0，则说明没有查到结果，向客户端发送'f'
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_RETRIEVE_PASSWD;
         buf.text[0] = 'f';
@@ -1112,7 +1114,7 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
     }
     else if (1 == row)
     {
-        //若传出参数row=1，则说明查到了密码，向客户端发送密码
+        // 若传出参数row=1，则说明查到了密码，向客户端发送密码
         memset(&buf, 0, sizeof(buf));
         buf.opt = U_RETRIEVE_PASSWD;
         strncpy(buf.usr.passwd, result[1], 13);
@@ -1123,7 +1125,7 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
             ERRLOG("send");
         }
     }
-    //释放查询结果所占用的空间
+    // 释放查询结果所占用的空间
     sqlite3_free_table(result);
 
     return;
@@ -1132,21 +1134,21 @@ void RetrievePasswd(const int recvfd, const void *recvinfo)
 void UpdatePasswd(const int recvfd, const void *recvinfo)
 {
     int ret;
-    //作为传出参数，用作查询结果的行数与列数
+    // 作为传出参数，用作查询结果的行数与列数
     int row, column;
 
-    //传出参数，用于执行存放数据库查询结果的空间
+    // 传出参数，用于执行存放数据库查询结果的空间
     char **result;
-    //服务器返回给客户端的修改密码的结果
+    // 服务器返回给客户端的修改密码的结果
     char update_result;
-    //存放要执行的sql语句
+    // 存放要执行的sql语句
     char sql[256] = {0};
 
     struct info buf;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    //打开数据库句柄
-    //数据库操作前上锁
+    // 打开数据库句柄
+    // 数据库操作前上锁
     LOCK(server.usrsdb_mutex);
     ret = sqlite3_open("./usrs/usrs.db", &server.usrsdb);
     if (SQLITE_OK != ret)
@@ -1154,7 +1156,7 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         ERRLOG("sqlite3_open");
     }
     snprintf(sql, 256, "select passwd from usr where id='%s';", buf.usr.id);
-    //执行sql语句
+    // 执行sql语句
     ret = sqlite3_get_table(server.usrsdb, sql, &result, &row, &column, NULL);
     if (SQLITE_OK != ret)
     {
@@ -1165,8 +1167,8 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
     {
         if (0 != strcmp(result[1], buf.usr.passwd))
         {
-            //若输入的原密码错误，则向客户端发送'f'
-            //修改密码失败，说明客户端输入的参数有误，将消息发送给客户端
+            // 若输入的原密码错误，则向客户端发送'f'
+            // 修改密码失败，说明客户端输入的参数有误，将消息发送给客户端
             memset(&buf, 0, sizeof(buf));
             buf.opt = U_UPDATE_PASSWD;
             buf.text[0] = 'f';
@@ -1179,8 +1181,8 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         }
         else if (0 == strcmp(result[1], buf.text))
         {
-            //若输入的原密码正确但新密码与原来的密码一样，则向客户端发送'e'
-            //修改密码失败，客户端输入的新密码与原密码相同
+            // 若输入的原密码正确但新密码与原来的密码一样，则向客户端发送'e'
+            // 修改密码失败，客户端输入的新密码与原密码相同
             memset(&buf, 0, sizeof(buf));
             buf.opt = U_UPDATE_PASSWD;
             buf.text[0] = 'e';
@@ -1193,8 +1195,8 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         }
         else
         {
-            //若输入的原密码正确且新密码与原密码不同，则修改成功，向客户端发送's'
-            //执行修改密码的sql语句
+            // 若输入的原密码正确且新密码与原密码不同，则修改成功，向客户端发送's'
+            // 执行修改密码的sql语句
             memset(sql, 0, sizeof(sql));
             snprintf(sql, 256, "update usr set passwd='%s' where id='%s' and passwd='%s';", buf.text, buf.usr.id, buf.usr.passwd);
             ret = sqlite3_exec(server.usrsdb, sql, NULL, NULL, NULL);
@@ -1202,7 +1204,7 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
             {
                 ERRLOG("sqlite3_exec");
             }
-            //修改密码成功
+            // 修改密码成功
             memset(&buf, 0, sizeof(buf));
             buf.opt = U_UPDATE_PASSWD;
             buf.text[0] = 's';
@@ -1215,14 +1217,14 @@ void UpdatePasswd(const int recvfd, const void *recvinfo)
         }
     } while (0);
 
-    //释放查询结果所占用的空间
+    // 释放查询结果所占用的空间
     sqlite3_free_table(result);
-    //关闭数据库句柄并置空
+    // 关闭数据库句柄并置空
     sqlite3_close(server.usrsdb);
     server.usrsdb = NULL;
-    //数据库操作后解锁
+    // 数据库操作后解锁
     UNLOCK(server.usrsdb_mutex);
-    //将此文件描述符从忙文件描述符数组中移除
+    // 将此文件描述符从忙文件描述符数组中移除
     server.workingfds[recvfd] = 0;
 
     return;
@@ -1238,7 +1240,7 @@ void Admin(const int recvfd, const void *recvinfo)
     struct info buf;
 
     memcpy(&buf, recvinfo, sizeof(buf));
-    
+
     userlinklist *p = server.usrs_online->next;
 
     while (p != NULL)
@@ -1302,9 +1304,9 @@ char *GetTime()
 
     time_t clock;
 
-    //获取时间，保存到time_t结构体中。在time的返回值(sec)里面有全部秒数
+    // 获取时间，保存到time_t结构体中。在time的返回值(sec)里面有全部秒数
     time(&clock);
-    strcpy(str_t, ctime(&clock)); //将time_t类型的结构体中的时间，按照一定格式保存成字符串，
+    strcpy(str_t, ctime(&clock)); // 将time_t类型的结构体中的时间，按照一定格式保存成字符串，
 
     return str_t;
 }
